@@ -1,0 +1,25 @@
+name = "tests"
+description = "Test suite for textrender"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["tests"]
+
+[[depends-on]]
+aunit = "^26.0.0"
+
+[[depends-on]]
+textrender = "*"
+
+[[pins]]
+textrender = { path = ".." }
+
+[[depends-on]]
+project_tools = "*"
+
+[[pins]]
+project_tools = { path = "../../project_tools" }
