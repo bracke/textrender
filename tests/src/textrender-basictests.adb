@@ -6,9 +6,11 @@ package body Textrender.BasicTests is
    Font_Path : constant String :=
      "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
 
+   R : Textrender.Renderer;
+
    function Atlas_Checksum return Natural is
       Pixels : constant access constant Textrender.Alpha_Buffer :=
-        Textrender.Atlas_Pixels;
+        Textrender.Atlas_Pixels (R);
 
       Sum : Natural := 0;
    begin
@@ -25,7 +27,7 @@ package body Textrender.BasicTests is
 
    function Atlas_Has_Nonzero_Pixel return Boolean is
       Pixels : constant access constant Textrender.Alpha_Buffer :=
-        Textrender.Atlas_Pixels;
+        Textrender.Atlas_Pixels (R);
    begin
       if Pixels = null then
          return False;
@@ -47,11 +49,11 @@ package body Textrender.BasicTests is
 
       M : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Get_Glyph
-           (C => Character'Pos ('A'),
+           (R, C => Character'Pos ('A'),
             M => M)
          = Textrender.Font_Not_Loaded,
          "Get_Glyph before Load_Font should return Font_Not_Loaded");
@@ -62,11 +64,11 @@ package body Textrender.BasicTests is
    is
       pragma Unreferenced (T);
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => "/definitely/not/a/font.ttf",
+           (R, Path         => "/definitely/not/a/font.ttf",
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -83,11 +85,11 @@ package body Textrender.BasicTests is
 
       Status : Textrender.Status_Code;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Status :=
         Textrender.Load_Font
-          (Path         => Font_Path,
+          (R, Path         => Font_Path,
            Pixel_Size   => 16,
            Cell_Width   => 10,
            Cell_Height  => 20,
@@ -95,13 +97,13 @@ package body Textrender.BasicTests is
            Atlas_Height => 256);
 
       Assert (Status = Textrender.Success, "Load_Font should succeed");
-      Assert (Textrender.Ascent > 0.0, "Ascent should be positive");
-      Assert (Textrender.Descent < 0.0, "Descent should be negative");
-      Assert (Textrender.Line_Height > 0.0, "Line_Height should be positive");
-      Assert (Textrender.Cell_Width = 10, "Cell_Width should match input");
-      Assert (Textrender.Cell_Height = 20, "Cell_Height should match input");
-      Assert (Textrender.Atlas_Width = 256, "Atlas_Width should match input");
-      Assert (Textrender.Atlas_Height = 256, "Atlas_Height should match input");
+      Assert (Textrender.Ascent (R) > 0.0, "Ascent should be positive");
+      Assert (Textrender.Descent (R) < 0.0, "Descent should be negative");
+      Assert (Textrender.Line_Height (R) > 0.0, "Line_Height should be positive");
+      Assert (Textrender.Cell_Width (R) = 10, "Cell_Width should match input");
+      Assert (Textrender.Cell_Height (R) = 20, "Cell_Height should match input");
+      Assert (Textrender.Atlas_Width (R) = 256, "Atlas_Width should match input");
+      Assert (Textrender.Atlas_Height (R) = 256, "Atlas_Height should match input");
    end Test_Load_Font_And_Metrics;
 
    procedure Test_Get_Glyph_A
@@ -112,11 +114,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Status :=
         Textrender.Load_Font
-          (Path         => Font_Path,
+          (R, Path         => Font_Path,
            Pixel_Size   => 16,
            Cell_Width   => 10,
            Cell_Height  => 20,
@@ -127,15 +129,15 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M);
 
       Assert
         (Status = Textrender.Success,
          "Get_Glyph('A') should succeed");
 
-      Assert (M.W > 0.0, "Glyph A width should be positive");
-      Assert (M.H > 0.0, "Glyph A height should be positive");
+      Assert (M.W > 0, "Glyph A width should be positive");
+      Assert (M.H > 0, "Glyph A height should be positive");
       Assert (M.Advance_X > 0.0, "Glyph A advance should be positive");
 
       Assert
@@ -158,11 +160,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Status :=
         Textrender.Load_Font
-          (Path         => Font_Path,
+          (R, Path         => Font_Path,
            Pixel_Size   => 16,
            Cell_Width   => 10,
            Cell_Height  => 20,
@@ -173,15 +175,15 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos (' '),
+          (R, C => Character'Pos (' '),
            M => M);
 
       Assert
         (Status = Textrender.Success,
          "Get_Glyph(' ') should succeed");
 
-      Assert (M.W = 0.0, "Space glyph width should be zero");
-      Assert (M.H = 0.0, "Space glyph height should be zero");
+      Assert (M.W = 0, "Space glyph width should be zero");
+      Assert (M.H = 0, "Space glyph height should be zero");
       Assert (M.Advance_X > 0.0, "Space advance should be positive");
    end Test_Get_Glyph_Space;
 
@@ -193,11 +195,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Status :=
         Textrender.Load_Font
-          (Path         => Font_Path,
+          (R, Path         => Font_Path,
            Pixel_Size   => 32,
            Cell_Width   => 20,
            Cell_Height  => 40,
@@ -208,7 +210,7 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M);
 
       Assert
@@ -227,11 +229,11 @@ package body Textrender.BasicTests is
       M1 : Textrender.Glyph_Metric;
       M2 : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -242,12 +244,12 @@ package body Textrender.BasicTests is
 
       Status_1 :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M1);
 
       Status_2 :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M2);
 
       Assert (Status_1 = Textrender.Success, "First Get_Glyph('A') should succeed");
@@ -280,11 +282,11 @@ package body Textrender.BasicTests is
       Checksum_1 : Natural;
       Checksum_2 : Natural;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -295,7 +297,7 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M1);
 
       Assert (Status = Textrender.Success, "First Get_Glyph('A') should succeed");
@@ -304,7 +306,7 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M2);
 
       Assert (Status = Textrender.Success, "Second Get_Glyph('A') should succeed");
@@ -331,11 +333,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -347,7 +349,7 @@ package body Textrender.BasicTests is
       for C in 32 .. 126 loop
          Status :=
            Textrender.Get_Glyph
-             (C => C,
+             (R, C => C,
               M => M);
 
          Assert
@@ -373,11 +375,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
       (Textrender.Load_Font
-         (Path         => Font_Path,
+         (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -388,7 +390,7 @@ package body Textrender.BasicTests is
 
       Status :=
       Textrender.Get_Glyph
-         (C => Character'Pos ('!'),
+         (R, C => Character'Pos ('!'),
          M => M);
 
       Assert
@@ -409,11 +411,11 @@ package body Textrender.BasicTests is
       M      : Textrender.Glyph_Metric;
    begin
 
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       pragma Assert
       (Textrender.Load_Font
-         (Path         => Font_Path,
+         (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -424,7 +426,7 @@ package body Textrender.BasicTests is
       for C in Character'Pos (' ') .. Character'Pos ('~') loop
          declare
             S : constant Textrender.Status_Code :=
-            Textrender.Get_Glyph (C => C, M => M);
+            Textrender.Get_Glyph (R, C => C, M => M);
          begin
             null; -- ignore status here
          end;
@@ -446,11 +448,11 @@ package body Textrender.BasicTests is
       Top_Y      : Float;
       Bottom_Y   : Float;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -468,7 +470,7 @@ package body Textrender.BasicTests is
             begin
                Status :=
                  Textrender.Get_Glyph
-                   (C => Character'Pos (C),
+                   (R, C => Character'Pos (C),
                     M => M);
 
                Assert
@@ -479,7 +481,7 @@ package body Textrender.BasicTests is
                Assert (M.Bearing_Y >= 0.0, "Bearing_Y should be non-negative");
 
                Top_Y    := Baseline_Y - M.Bearing_Y;
-               Bottom_Y := Top_Y + M.H;
+               Bottom_Y := Top_Y + Float (M.H);
 
                Assert
                  (Bottom_Y >= Baseline_Y - 3.0,
@@ -497,11 +499,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -513,15 +515,15 @@ package body Textrender.BasicTests is
       --  U+00E9 LATIN SMALL LETTER E WITH ACUTE
       Status :=
         Textrender.Get_Glyph
-          (C => 16#00E9#,
+          (R, C => 16#00E9#,
            M => M);
 
       Assert
         (Status = Textrender.Success,
          "Composite accented glyph should render");
 
-      Assert (M.W > 0.0, "Composite glyph width should be positive");
-      Assert (M.H > 0.0, "Composite glyph height should be positive");
+      Assert (M.W > 0, "Composite glyph width should be positive");
+      Assert (M.H > 0, "Composite glyph height should be positive");
       Assert (M.Advance_X > 0.0, "Composite glyph advance should be positive");
    end Test_Composite_Accented_Glyph;
 
@@ -533,11 +535,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -549,7 +551,7 @@ package body Textrender.BasicTests is
       --  U+263A WHITE SMILING FACE
       Status :=
         Textrender.Get_Glyph
-          (C => 16#263A#,
+          (R, C => 16#263A#,
            M => M);
 
       --  Accept fallback if font lacks it
@@ -575,11 +577,11 @@ package body Textrender.BasicTests is
 
       Baseline  : Float;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -590,17 +592,17 @@ package body Textrender.BasicTests is
 
       Status :=
         Textrender.Get_Glyph
-          (C => Character'Pos ('A'),
+          (R, C => Character'Pos ('A'),
            M => M);
 
       Assert (Status = Textrender.Success, "Glyph A should load");
 
       P := Textrender.Place_Glyph_In_Cell
-        (M      => M,
+        (R, M => M,
          Cell_X => Cell_X,
          Cell_Y => Cell_Y);
 
-      Baseline := Cell_Y + Textrender.Ascent;
+      Baseline := Cell_Y + Textrender.Ascent (R);
 
       Assert
         (P.X = Cell_X + M.Bearing_X,
@@ -622,11 +624,11 @@ package body Textrender.BasicTests is
       M1 : Textrender.Glyph_Metric;
       M2 : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -636,8 +638,8 @@ package body Textrender.BasicTests is
          "Load_Font should succeed");
 
       --  Pick something unlikely to exist
-      Status_1 := Textrender.Get_Glyph (16#10FFFF#, M1);
-      Status_2 := Textrender.Get_Glyph (16#10FFFF#, M2);
+      Status_1 := Textrender.Get_Glyph (R, 16#10FFFF#, M1);
+      Status_2 := Textrender.Get_Glyph (R, 16#10FFFF#, M2);
 
       Assert
         (Status_1 = Textrender.Glyph_Missing,
@@ -661,11 +663,11 @@ package body Textrender.BasicTests is
       Status : Textrender.Status_Code;
       M      : Textrender.Glyph_Metric;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -673,13 +675,13 @@ package body Textrender.BasicTests is
             Atlas_Height => 256)
          = Textrender.Success, "Error during font load");
 
-      Status := Textrender.Get_Glyph (Character'Pos ('A'), M);
+      Status := Textrender.Get_Glyph (R, Character'Pos ('A'), M);
       Assert (Status = Textrender.Success, "Get_Glyph error");
 
       --  Reload
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -687,7 +689,7 @@ package body Textrender.BasicTests is
             Atlas_Height => 256)
          = Textrender.Success, "Font loading error");
 
-      Status := Textrender.Get_Glyph (Character'Pos ('A'), M);
+      Status := Textrender.Get_Glyph (R, Character'Pos ('A'), M);
       Assert (Status = Textrender.Success, "Error fetching glyph");
    end Test_Reload_Clears_Cache;
 
@@ -696,11 +698,11 @@ package body Textrender.BasicTests is
    is
       pragma Unreferenced (T);
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -709,11 +711,11 @@ package body Textrender.BasicTests is
          = Textrender.Success, "Font loading problem");
 
       Assert
-        (Textrender.Has_Glyph (Character'Pos ('A')),
+        (Textrender.Has_Glyph (R, Character'Pos ('A')),
          "Font should directly contain A");
 
       Assert
-        (not Textrender.Has_Glyph (16#10FFFF#),
+        (not Textrender.Has_Glyph (R, 16#10FFFF#),
          "Font should not directly contain U+10FFFF");
    end Test_Has_Glyph;
 
@@ -722,10 +724,10 @@ package body Textrender.BasicTests is
    is
       pragma Unreferenced (T);
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
-        (not Textrender.Has_Glyph (Character'Pos ('A')),
+        (not Textrender.Has_Glyph (R, Character'Pos ('A')),
          "Has_Glyph before Load_Font should return False");
    end Test_Has_Glyph_Before_Load;
 
@@ -734,10 +736,10 @@ package body Textrender.BasicTests is
    is
       pragma Unreferenced (T);
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
-        (Textrender.Atlas_Pixels = null,
+        (Textrender.Atlas_Pixels (R) = null,
          "Atlas_Pixels after Reset should be null");
    end Test_Atlas_Pixels_After_Reset;
 
@@ -751,11 +753,11 @@ package body Textrender.BasicTests is
 
       S  : Textrender.Status_Code;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -763,10 +765,10 @@ package body Textrender.BasicTests is
             Atlas_Height => 256)
          = Textrender.Success, "Font loading error");
 
-      S := Textrender.Get_Glyph (Character'Pos ('A'), M1);
+      S := Textrender.Get_Glyph (R, Character'Pos ('A'), M1);
       Assert (S = Textrender.Success, "Get_Glyph error");
 
-      S := Textrender.Get_Glyph (Character'Pos ('B'), M2);
+      S := Textrender.Get_Glyph (R, Character'Pos ('B'), M2);
       Assert (S = Textrender.Success, "Get_Glyph error");
 
       Assert
@@ -784,11 +786,11 @@ package body Textrender.BasicTests is
 
       S   : Textrender.Status_Code;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -796,12 +798,12 @@ package body Textrender.BasicTests is
             Atlas_Height => 256)
          = Textrender.Success, "Font loading error");
 
-      S := Textrender.Get_Glyph (Character'Pos ('A'), M16);
+      S := Textrender.Get_Glyph (R, Character'Pos ('A'), M16);
       Assert (S = Textrender.Success, "Get_Glyph error");
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -809,7 +811,7 @@ package body Textrender.BasicTests is
             Atlas_Height => 512)
          = Textrender.Success, "Font loading error");
 
-      S := Textrender.Get_Glyph (Character'Pos ('A'), M32);
+      S := Textrender.Get_Glyph (R, Character'Pos ('A'), M32);
       Assert (S = Textrender.Success, "Get_Glyph error");
 
       Assert
@@ -828,11 +830,11 @@ package body Textrender.BasicTests is
       M : Textrender.Glyph_Metric;
       S : Textrender.Status_Code;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 32,
             Cell_Width   => 20,
             Cell_Height  => 40,
@@ -841,7 +843,7 @@ package body Textrender.BasicTests is
          = Textrender.Success, "Font loading error");
 
       for I in Codes'Range loop
-         S := Textrender.Get_Glyph (Codes (I), M);
+         S := Textrender.Get_Glyph (R, Codes (I), M);
 
          Assert
            (S = Textrender.Success
@@ -861,11 +863,11 @@ package body Textrender.BasicTests is
       Checksum_1 : Natural;
       Checksum_2 : Natural;
    begin
-      Textrender.Reset;
+      Textrender.Reset (R);
 
       Assert
         (Textrender.Load_Font
-           (Path         => Font_Path,
+           (R, Path         => Font_Path,
             Pixel_Size   => 16,
             Cell_Width   => 10,
             Cell_Height  => 20,
@@ -876,7 +878,7 @@ package body Textrender.BasicTests is
 
       --  First pass: rasterizes and fills atlas/cache.
       for C in 32 .. 126 loop
-         S := Textrender.Get_Glyph (C, M);
+         S := Textrender.Get_Glyph (R, C, M);
 
          Assert
            (S = Textrender.Success,
@@ -888,7 +890,7 @@ package body Textrender.BasicTests is
 
       --  Second pass: should be entirely cache hits.
       for C in 32 .. 126 loop
-         S := Textrender.Get_Glyph (C, M);
+         S := Textrender.Get_Glyph (R, C, M);
 
          Assert
            (S = Textrender.Success,
@@ -902,6 +904,99 @@ package body Textrender.BasicTests is
         (Checksum_1 = Checksum_2,
          "Cached ASCII pass should not modify atlas");
    end Test_ASCII_Range_Cached_Does_Not_Rewrite_Atlas;
+
+   --  Regression guard for per-glyph spacing/geometry. For every drawable
+   --  ASCII glyph, at several pixel sizes, the atlas UV rectangle the caller
+   --  samples must match the integer pixel rectangle it draws (W/H), and its
+   --  immediate left/right atlas neighbours must be empty. A mismatch here is
+   --  exactly what shows up as a spurious gap after (roughly) every second
+   --  character, so this asserts the drawn size and the sampled span agree.
+   procedure Test_Glyph_UV_Matches_Draw_Rect
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      procedure Run (Pixel_Size, Cell : Positive) is
+         Status : Textrender.Status_Code;
+         M      : Textrender.Glyph_Metric;
+         AW     : Positive;
+         AH     : Positive;
+         Pixels : access constant Textrender.Alpha_Buffer;
+      begin
+         Textrender.Reset (R);
+         Assert
+           (Textrender.Load_Font
+              (R, Path         => Font_Path,
+               Pixel_Size   => Pixel_Size,
+               Cell_Width   => Cell,
+               Cell_Height  => Cell * 2,
+               Atlas_Width  => 1024,
+               Atlas_Height => 1024)
+            = Textrender.Success,
+            "Load_Font should succeed");
+
+         AW := Textrender.Atlas_Width (R);
+         AH := Textrender.Atlas_Height (R);
+         Pixels := Textrender.Atlas_Pixels (R);
+
+         for C in 33 .. 126 loop
+            Status := Textrender.Get_Glyph (R, C => C, M => M);
+
+            if Status = Textrender.Success and then M.W > 0 and then M.H > 0 then
+               declare
+                  U_Span : constant Integer :=
+                    Integer (Float'Rounding ((M.U1 - M.U0) * Float (AW)));
+                  V_Span : constant Integer :=
+                    Integer (Float'Rounding ((M.V1 - M.V0) * Float (AH)));
+                  U0_Px  : constant Integer :=
+                    Integer (Float'Rounding (M.U0 * Float (AW)));
+                  V0_Px  : constant Integer :=
+                    Integer (Float'Rounding (M.V0 * Float (AH)));
+               begin
+                  Assert
+                    (U_Span = M.W,
+                     "UV width must equal draw width W: cp="
+                     & Integer'Image (C) & " W=" & Natural'Image (M.W)
+                     & " U-span=" & Integer'Image (U_Span)
+                     & " px=" & Positive'Image (Pixel_Size));
+                  Assert
+                    (V_Span = M.H,
+                     "UV height must equal draw height H: cp="
+                     & Integer'Image (C));
+                  Assert
+                    (U0_Px = M.X and then V0_Px = M.Y,
+                     "U0/V0 must address the glyph's atlas origin: cp="
+                     & Integer'Image (C));
+                  Assert (M.Advance_X > 0.0, "Advance must be positive");
+
+                  --  No neighbour bleed: the padding column on either side of
+                  --  the glyph rectangle must be empty, otherwise adjacent
+                  --  glyphs share texels and text spacing looks wrong.
+                  if Pixels /= null then
+                     for Row in M.Y .. M.Y + M.H - 1 loop
+                        if M.X > 0 then
+                           Assert
+                             (Pixels (Row * AW + (M.X - 1)) = 0,
+                              "Left padding column must be empty: cp="
+                              & Integer'Image (C));
+                        end if;
+                        if M.X + M.W < AW then
+                           Assert
+                             (Pixels (Row * AW + (M.X + M.W)) = 0,
+                              "Right padding column must be empty: cp="
+                              & Integer'Image (C));
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end Run;
+   begin
+      Run (16, 10);
+      Run (24, 16);
+      Run (32, 20);
+   end Test_Glyph_UV_Matches_Draw_Rect;
 
    overriding
    function Name
@@ -921,6 +1016,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Get_Glyph_Before_Load'Access,
          "Get_Glyph before Load_Font returns Font_Not_Loaded");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Glyph_UV_Matches_Draw_Rect'Access,
+         "Glyph UV rectangle matches draw rectangle (spacing guard)");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

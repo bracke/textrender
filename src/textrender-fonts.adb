@@ -73,7 +73,7 @@ package body Textrender.Fonts is
       Offset : Natural) return Natural
    is
    begin
-      return F.Data (Offset + 1);
+      return Natural (F.Data (Offset + 1));
    end Byte_At;
 
    function U16
@@ -824,7 +824,7 @@ package body Textrender.Fonts is
          end if;
 
          for I in Buffer'Range loop
-            F.Data (Positive (I)) := Natural (Buffer (I));
+            F.Data (Positive (I)) := Interfaces.Unsigned_8 (Buffer (I));
          end loop;
       end;
 

@@ -1,3 +1,5 @@
+with Interfaces;
+
 package Textrender.Fonts is
 
    subtype Codepoint is Natural range 0 .. 16#10FFFF#;
@@ -80,7 +82,7 @@ package Textrender.Fonts is
 
 private
 
-   type Font_Buffer is array (Positive range <>) of Natural;
+   type Font_Buffer is array (Positive range <>) of Interfaces.Unsigned_8;
    type Font_Buffer_Access is access all Font_Buffer;
 
    type Table_Info is record

@@ -600,8 +600,8 @@ package body Textrender.Rasterizer is
       pragma Assert
       (Segment_Count > 0,
          "No segments generated for non-empty simple glyph");
-            declare
-         Samples_Per_Axis : constant Positive := 4;
+      declare
+         Samples_Per_Axis : constant Positive := 8;
          Total_Samples    : constant Positive :=
            Samples_Per_Axis * Samples_Per_Axis;
       begin
@@ -646,12 +646,12 @@ package body Textrender.Rasterizer is
                      and then Atlas_Y + PY < Textrender.Atlases.Height (A)
                   then
                      Textrender.Atlases.Blend_Max
-                     (A     => A,
+                       (A     => A,
                         X     => Atlas_X + PX,
                         Y     => Atlas_Y + PY,
                         Value =>
-                        Textrender.Atlases.Alpha
-                           ((Covered * 255) / Total_Samples));
+                          Textrender.Atlases.Alpha
+                            ((Covered * 255) / Total_Samples));
                   end if;
                end;
             end loop;

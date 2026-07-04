@@ -1,49 +1,125 @@
 with Textrender.Fonts; use Textrender.Fonts;
 with Textrender.Atlases;
 with Textrender.Rasterizer;
-with Ada.Containers.Ordered_Maps;
+with Ada.Containers; use Ada.Containers;
+with Ada.Containers.Hashed_Maps;
+with Ada.Containers.Vectors;
+with Ada.Unchecked_Deallocation;
 
 package body Textrender is
-
-   Atlas_Dirty_V : Boolean := False;
-   Font  : Textrender.Fonts.Font;
-   Atlas : Textrender.Atlases.Atlas;
 
    type Cached_Glyph is record
       Status : Status_Code := Success;
       Metric : Glyph_Metric;
    end record;
 
-   package Glyph_Caches is new Ada.Containers.Ordered_Maps
-     (Key_Type     => Codepoint,
-      Element_Type => Cached_Glyph);
+   function Codepoint_Hash (C : Codepoint) return Hash_Type is
+     (Hash_Type (C));
 
-   Glyph_Cache : Glyph_Caches.Map;
-
-   Pixel_Size_V : Positive := 1;
-   Cell_Width_V : Positive := 1;
-   Cell_Height_V : Positive := 1;
+   package Glyph_Caches is new Ada.Containers.Hashed_Maps
+     (Key_Type        => Codepoint,
+      Element_Type    => Cached_Glyph,
+      Hash            => Codepoint_Hash,
+      Equivalent_Keys => "=");
 
    Glyph_Padding : constant Natural := 1;
 
    use type Textrender.Fonts.Glyph_Lookup_Result;
 
+   --  Tangent of the slant angle. 0.0 = upright. ~0.21 corresponds to a
+   --  12-degree oblique, a typical italic tilt.
+   Italic_Slant_Tangent : constant Float := 0.21;
+
+   function Slant_For (Style : Font_Style) return Float is
+     (case Style is
+        when Regular => 0.0,
+        when Italic  => Italic_Slant_Tangent);
+
+   --  Ordered fallback font chain. Each element is an additional font face
+   --  that shares the renderer's single atlas; Get_Glyph consults the primary
+   --  font first and then these in order. Fonts are non-limited records that
+   --  merely reference their own byte buffer, so storing them by value here is
+   --  a shallow copy; each is released with Textrender.Fonts.Reset on teardown.
+   package Font_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Textrender.Fonts.Font);
+
+   type Renderer_State is record
+      Font          : Textrender.Fonts.Font;
+      Fallbacks     : Font_Vectors.Vector;
+      Atlas         : Textrender.Atlases.Atlas;
+      Cache         : Glyph_Caches.Map;
+      Italic_Cache  : Glyph_Caches.Map;
+      Pixel_Size    : Positive := 1;
+      Cell_Width_V  : Positive := 1;
+      Cell_Height_V : Positive := 1;
+      Atlas_Dirty_V : Boolean := False;
+   end record;
+
+   procedure Reset_Fallbacks (State : in out Renderer_State);
+
+   procedure Reset_Fallbacks (State : in out Renderer_State) is
+   begin
+      for F of State.Fallbacks loop
+         Textrender.Fonts.Reset (F);
+      end loop;
+
+      State.Fallbacks.Clear;
+   end Reset_Fallbacks;
+
+   procedure Free_State is new Ada.Unchecked_Deallocation
+     (Renderer_State, Renderer_State_Access);
+
+   procedure Ensure_State (R : in out Renderer) with Inline;
+
+   procedure Ensure_State (R : in out Renderer) is
+   begin
+      if R.State = null then
+         R.State := new Renderer_State;
+      end if;
+   end Ensure_State;
+
+   -----------------------------
+   -- Initialize / Finalize
+   -----------------------------
+
+   overriding procedure Initialize (R : in out Renderer) is
+   begin
+      R.State := new Renderer_State;
+   end Initialize;
+
+   overriding procedure Finalize (R : in out Renderer) is
+   begin
+      if R.State /= null then
+         Textrender.Fonts.Reset (R.State.Font);
+         Reset_Fallbacks (R.State.all);
+         Textrender.Atlases.Reset (R.State.Atlas);
+         R.State.Cache.Clear;
+         R.State.Italic_Cache.Clear;
+         Free_State (R.State);
+      end if;
+   end Finalize;
+
    -----------------------------
    -- Reset
    -----------------------------
 
-   procedure Reset is
+   procedure Reset (R : in out Renderer) is
    begin
-      Textrender.Fonts.Reset (Font);
-      Textrender.Atlases.Reset (Atlas);
+      Ensure_State (R);
 
-      Glyph_Cache.Clear;
+      Textrender.Fonts.Reset (R.State.Font);
+      Reset_Fallbacks (R.State.all);
+      Textrender.Atlases.Reset (R.State.Atlas);
 
-      Pixel_Size_V := 1;
-      Cell_Width_V := 1;
-      Cell_Height_V := 1;
+      R.State.Cache.Clear;
+      R.State.Italic_Cache.Clear;
 
-      Atlas_Dirty_V := False;
+      R.State.Pixel_Size    := 1;
+      R.State.Cell_Width_V  := 1;
+      R.State.Cell_Height_V := 1;
+
+      R.State.Atlas_Dirty_V := False;
    end Reset;
 
    -----------------------------
@@ -51,7 +127,8 @@ package body Textrender is
    -----------------------------
 
    function Load_Font
-     (Path         : String;
+     (R            : in out Renderer;
+      Path         : String;
       Pixel_Size   : Positive;
       Cell_Width   : Positive;
       Cell_Height  : Positive;
@@ -60,74 +137,103 @@ package body Textrender is
    is
       Result : Textrender.Fonts.Load_Result;
    begin
-      Reset;
+      Reset (R);
 
-      Result := Textrender.Fonts.Load (Font, Path);
+      Result := Textrender.Fonts.Load (R.State.Font, Path);
 
       if Result /= Textrender.Fonts.Loaded then
          return Font_Load_Failed;
       end if;
 
-      Pixel_Size_V := Pixel_Size;
-      Cell_Width_V := Cell_Width;
-      Cell_Height_V := Cell_Height;
+      R.State.Pixel_Size    := Pixel_Size;
+      R.State.Cell_Width_V  := Cell_Width;
+      R.State.Cell_Height_V := Cell_Height;
 
       Textrender.Atlases.Init
-        (Atlas,
+        (R.State.Atlas,
          Width  => Atlas_Width,
          Height => Atlas_Height);
 
-      Atlas_Dirty_V := True;
+      R.State.Atlas_Dirty_V := True;
 
       return Success;
    end Load_Font;
 
    -----------------------------
+   -- Add_Fallback_Font
+   -----------------------------
+
+   function Add_Fallback_Font
+     (R    : in out Renderer;
+      Path : String) return Status_Code
+   is
+      New_Font : Textrender.Fonts.Font;
+      Result   : Textrender.Fonts.Load_Result;
+   begin
+      Ensure_State (R);
+
+      --  A primary font must be loaded first: it establishes the shared atlas,
+      --  pixel size, and grid that every fallback rasterizes into.
+      if not Textrender.Fonts.Loaded (R.State.Font) then
+         return Font_Not_Loaded;
+      end if;
+
+      Result := Textrender.Fonts.Load (New_Font, Path);
+
+      if Result /= Textrender.Fonts.Loaded then
+         Textrender.Fonts.Reset (New_Font);
+         return Font_Load_Failed;
+      end if;
+
+      R.State.Fallbacks.Append (New_Font);
+
+      return Success;
+   end Add_Fallback_Font;
+
+   -----------------------------
    -- Metrics
    -----------------------------
 
-   function Ascent return Float is
+   function Ascent (R : Renderer) return Float is
    begin
       return
-        Float (Textrender.Fonts.Ascent (Font))
-        * Float (Pixel_Size_V)
-        / Float (Textrender.Fonts.Units_Per_Em (Font));
+        Float (Textrender.Fonts.Ascent (R.State.Font))
+        * Float (R.State.Pixel_Size)
+        / Float (Textrender.Fonts.Units_Per_Em (R.State.Font));
    end Ascent;
 
-   function Descent return Float is
+   function Descent (R : Renderer) return Float is
    begin
       return
-        Float (Textrender.Fonts.Descent (Font))
-        * Float (Pixel_Size_V)
-        / Float (Textrender.Fonts.Units_Per_Em (Font));
+        Float (Textrender.Fonts.Descent (R.State.Font))
+        * Float (R.State.Pixel_Size)
+        / Float (Textrender.Fonts.Units_Per_Em (R.State.Font));
    end Descent;
 
-   function Line_Height return Float is
+   function Line_Height (R : Renderer) return Float is
    begin
       return
         Float
-          (Textrender.Fonts.Ascent (Font)
-           - Textrender.Fonts.Descent (Font)
-           + Textrender.Fonts.Line_Gap (Font))
-        * Float (Pixel_Size_V)
-        / Float (Textrender.Fonts.Units_Per_Em (Font));
+          (Textrender.Fonts.Ascent (R.State.Font)
+           - Textrender.Fonts.Descent (R.State.Font)
+           + Textrender.Fonts.Line_Gap (R.State.Font))
+        * Float (R.State.Pixel_Size)
+        / Float (Textrender.Fonts.Units_Per_Em (R.State.Font));
    end Line_Height;
 
-   function Cell_Width return Positive is
+   function Cell_Width (R : Renderer) return Positive is
    begin
-      return Cell_Width_V;
+      return R.State.Cell_Width_V;
    end Cell_Width;
 
-   function Cell_Height return Positive is
+   function Cell_Height (R : Renderer) return Positive is
    begin
-      return Cell_Height_V;
+      return R.State.Cell_Height_V;
    end Cell_Height;
 
-   function Has_Glyph
-     (C : Codepoint) return Boolean
-   is
+   function Has_Glyph (R : Renderer; C : Codepoint) return Boolean is
    begin
-      return Textrender.Fonts.Has_Glyph (Font, C);
+      return Textrender.Fonts.Has_Glyph (R.State.Font, C);
    end Has_Glyph;
 
    -----------------------------
@@ -135,21 +241,42 @@ package body Textrender is
    -----------------------------
 
    function Get_Glyph
-     (C : Codepoint;
-      M : out Glyph_Metric) return Status_Code
+     (R     : in out Renderer;
+      C     : Codepoint;
+      M     : out Glyph_Metric;
+      Style : Font_Style := Regular) return Status_Code
    is
+      procedure Cache_Insert (Key : Codepoint; Item : Cached_Glyph) is
+      begin
+         case Style is
+            when Regular => R.State.Cache.Insert (Key, Item);
+            when Italic  => R.State.Italic_Cache.Insert (Key, Item);
+         end case;
+      end Cache_Insert;
+
+      function Cache_Contains (Key : Codepoint) return Boolean is
+        (case Style is
+           when Regular => R.State.Cache.Contains (Key),
+           when Italic  => R.State.Italic_Cache.Contains (Key));
+
+      function Cache_Element (Key : Codepoint) return Cached_Glyph is
+        (case Style is
+           when Regular => R.State.Cache.Element (Key),
+           when Italic  => R.State.Italic_Cache.Element (Key));
       G : Textrender.Fonts.Glyph_Info;
 
       Lookup_Result : Textrender.Fonts.Glyph_Lookup_Result;
+
+      --  The font in the chain resolved for this codepoint (primary or a
+      --  fallback). All metrics below derive from this font.
+      Selected : Textrender.Fonts.Font;
 
       Pack_X  : Natural;
       Pack_Y  : Natural;
       Atlas_X : Natural;
       Atlas_Y : Natural;
 
-      Scale : constant Float :=
-        Float (Pixel_Size_V)
-        / Float (Textrender.Fonts.Units_Per_Em (Font));
+      Scale : Float;
 
       Glyph_W : Positive;
       Glyph_H : Positive;
@@ -159,21 +286,45 @@ package body Textrender is
 
       Return_Status : Status_Code;
    begin
-      if not Textrender.Fonts.Loaded (Font) then
+      if not Textrender.Fonts.Loaded (R.State.Font) then
          return Font_Not_Loaded;
       end if;
 
-      if Glyph_Cache.Contains (C) then
+      if Cache_Contains (C) then
          declare
-            Cached : constant Cached_Glyph := Glyph_Cache.Element (C);
+            Cached : constant Cached_Glyph := Cache_Element (C);
          begin
             M := Cached.Metric;
             return Cached.Status;
          end;
       end if;
 
+      --  Per-glyph font fallback: consult the primary font first, then each
+      --  appended fallback in order, and resolve C to the first font that
+      --  directly maps it. Has_Glyph is a cmap lookup only -- it never
+      --  rasterizes, so probing the chain is cheap. When no font in the chain
+      --  maps C, keep the primary font so its own Lookup_Glyph emits the
+      --  not-found path (Glyph_Used_Fallback -> Glyph_Missing), matching a
+      --  single-font renderer exactly. Resolution is deterministic for a given
+      --  codepoint and fixed chain order, so the per-codepoint cache key stays
+      --  correct: C always resolves through the same font.
+      Selected := R.State.Font;
+
+      if not Textrender.Fonts.Has_Glyph (R.State.Font, C) then
+         for F of R.State.Fallbacks loop
+            if Textrender.Fonts.Has_Glyph (F, C) then
+               Selected := F;
+               exit;
+            end if;
+         end loop;
+      end if;
+
+      Scale :=
+        Float (R.State.Pixel_Size)
+        / Float (Textrender.Fonts.Units_Per_Em (Selected));
+
       Lookup_Result :=
-        Textrender.Fonts.Lookup_Glyph (Font, C, G);
+        Textrender.Fonts.Lookup_Glyph (Selected, C, G);
 
       if Lookup_Result = Textrender.Fonts.Glyph_Not_Found then
          return Glyph_Missing;
@@ -181,10 +332,10 @@ package body Textrender is
 
       --  Empty glyph (space etc.)
       if G.Is_Empty then
-         M.X := 0.0;
-         M.Y := 0.0;
-         M.W := 0.0;
-         M.H := 0.0;
+         M.X := 0;
+         M.Y := 0;
+         M.W := 0;
+         M.H := 0;
 
          M.U0 := 0.0;
          M.V0 := 0.0;
@@ -204,87 +355,131 @@ package body Textrender is
             then Glyph_Missing
             else Success);
 
-         Glyph_Cache.Insert
-           (Key      => C,
-            New_Item =>
-              (Status => Return_Status,
-               Metric => M));
+         Cache_Insert (C, (Status => Return_Status, Metric => M));
 
          return Return_Status;
       end if;
 
-      Raw_W := Float (G.Bounds.X_Max - G.Bounds.X_Min) * Scale;
-      Raw_H := Float (G.Bounds.Y_Max - G.Bounds.Y_Min) * Scale;
+      --  Use the font's ascent/descent (not the per-glyph bbox) for vertical
+      --  atlas extent. This makes the atlas top correspond to the same
+      --  baseline-relative position for every glyph, so all glyphs share an
+      --  identical Bearing_Y and snap to the same screen row. Any boundary
+      --  effect from per-glyph Y_Max — the cause of "r jitters" — disappears.
+      declare
+         Font_Ascent  : constant Integer := Textrender.Fonts.Ascent (Selected);
+         Font_Descent : constant Integer := Textrender.Fonts.Descent (Selected);
+         Line_Top     : constant Integer := Integer'Max (Font_Ascent, G.Bounds.Y_Max);
+         Line_Bottom  : constant Integer := Integer'Min (Font_Descent, G.Bounds.Y_Min);
+         Slant        : constant Float   := Slant_For (Style);
+         --  For italic, the slanted glyph extends to the right at the top and
+         --  to the left at the bottom (descender). Extend the atlas
+         --  horizontally to capture both ends. X_Slant_Min is in font units
+         --  and is <= 0; X_Slant_Max is >= 0.
+         X_Slant_Min  : constant Integer :=
+           (if Slant > 0.0 and then Line_Bottom < 0
+            then Integer (Float (Line_Bottom) * Slant - 0.999)
+            else 0);
+         X_Slant_Max  : constant Integer :=
+           (if Slant > 0.0 and then Line_Top > 0
+            then Integer (Float (Line_Top) * Slant + 0.999)
+            else 0);
+         X_Min_Adj    : constant Integer := G.Bounds.X_Min + X_Slant_Min;
+         X_Max_Adj    : constant Integer := G.Bounds.X_Max + X_Slant_Max;
+      begin
+         Raw_W := Float (X_Max_Adj - X_Min_Adj) * Scale;
+         Raw_H := Float (Line_Top - Line_Bottom) * Scale;
 
-      Glyph_W :=
-        (if Raw_W <= 0.0 then 1
-         else Positive (Integer (Raw_W + 0.999)));
+         Glyph_W :=
+           (if Raw_W <= 0.0 then 1
+            else Positive (Integer (Raw_W + 0.999)));
 
-      Glyph_H :=
-        (if Raw_H <= 0.0 then 1
-         else Positive (Integer (Raw_H + 0.999)));
+         Glyph_H :=
+           (if Raw_H <= 0.0 then 1
+            else Positive (Integer (Raw_H + 0.999)));
 
-      if not Textrender.Atlases.Allocate_Rect
-        (Atlas,
-         W => Glyph_W + Glyph_Padding * 2,
-         H => Glyph_H + Glyph_Padding * 2,
-         X => Pack_X,
-         Y => Pack_Y)
-      then
-         return Atlas_Full;
-      end if;
+         if not Textrender.Atlases.Allocate_Rect
+           (R.State.Atlas,
+            W => Glyph_W + Glyph_Padding * 2,
+            H => Glyph_H + Glyph_Padding * 2,
+            X => Pack_X,
+            Y => Pack_Y)
+         then
+            return Atlas_Full;
+         end if;
 
-      Atlas_X := Pack_X + Glyph_Padding;
-      Atlas_Y := Pack_Y + Glyph_Padding;
+         Atlas_X := Pack_X + Glyph_Padding;
+         Atlas_Y := Pack_Y + Glyph_Padding;
 
-      if not Textrender.Rasterizer.Rasterize_Glyph
-        (F           => Font,
-         A           => Atlas,
-         Glyph_Index => G.Glyph_Index,
-         Atlas_X     => Atlas_X,
-         Atlas_Y     => Atlas_Y,
-         Glyph_W     => Glyph_W,
-         Glyph_H     => Glyph_H,
-         X_Min       => G.Bounds.X_Min,
-         Y_Min       => G.Bounds.Y_Min,
-         X_Max       => G.Bounds.X_Max,
-         Y_Max       => G.Bounds.Y_Max,
-         Pixel_Size  => Pixel_Size_V)
-      then
-         for Y in Atlas_Y .. Atlas_Y + Glyph_H - 1 loop
-            for X in Atlas_X .. Atlas_X + Glyph_W - 1 loop
-               if X = Atlas_X or else X = Atlas_X + Glyph_W - 1
-                 or else Y = Atlas_Y or else Y = Atlas_Y + Glyph_H - 1
-               then
-                  Textrender.Atlases.Write_Pixel (Atlas, X, Y, 255);
-               else
-                  Textrender.Atlases.Write_Pixel (Atlas, X, Y, 96);
-               end if;
-            end loop;
-         end loop;
-      end if;
+         if not Textrender.Rasterizer.Rasterize_Glyph
+           (F           => Selected,
+            A           => R.State.Atlas,
+            Glyph_Index => G.Glyph_Index,
+            Atlas_X     => Atlas_X,
+            Atlas_Y     => Atlas_Y,
+            Glyph_W     => Glyph_W,
+            Glyph_H     => Glyph_H,
+            X_Min       => X_Min_Adj,
+            Y_Min       => Line_Bottom,
+            X_Max       => X_Max_Adj,
+            Y_Max       => Line_Top,
+            Pixel_Size  => R.State.Pixel_Size,
+            Transform   =>
+              (XX => 1.0, XY => Slant, YX => 0.0, YY => 1.0, DX => 0.0, DY => 0.0))
+         then
+            M := (X         => 0,
+                  Y         => 0,
+                  W         => 0,
+                  H         => 0,
+                  U0        => 0.0,
+                  V0        => 0.0,
+                  U1        => 0.0,
+                  V1        => 0.0,
+                  Advance_X => Float (G.Advance_X) * Scale,
+                  Bearing_X => Float (G.Left_Side_Bearing) * Scale,
+                  Bearing_Y => 0.0);
 
-      M.X := Float (Atlas_X);
-      M.Y := Float (Atlas_Y);
-      M.W := Float (Glyph_W);
-      M.H := Float (Glyph_H);
+            Cache_Insert (C, (Status => Rasterize_Failed, Metric => M));
 
-      M.U0 := Float (Atlas_X) / Float (Textrender.Atlases.Width (Atlas));
-      M.V0 := Float (Atlas_Y) / Float (Textrender.Atlases.Height (Atlas));
-      M.U1 := Float (Atlas_X + Glyph_W) / Float (Textrender.Atlases.Width (Atlas));
-      M.V1 := Float (Atlas_Y + Glyph_H) / Float (Textrender.Atlases.Height (Atlas));
+            return Rasterize_Failed;
+         end if;
 
-      M.Advance_X :=
-        Float (G.Advance_X) * Scale;
+         M.X := Atlas_X;
+         M.Y := Atlas_Y;
+         M.W := Glyph_W;
+         M.H := Glyph_H;
 
-      M.Bearing_X :=
-        Float (G.Left_Side_Bearing) * Scale;
+         --  Derive the atlas UV rectangle from the very same integer pixel
+         --  rectangle (M.X/M.Y/M.W/M.H) the caller draws. The sampled span is
+         --  then guaranteed to equal the drawn quad size to the texel, so a
+         --  glyph can never read a neighbour's texels or leave a phantom gap.
+         --  (Deriving U1 from an independently-rounded width was the class of
+         --  mistake that produces per-glyph spacing glitches.)
+         declare
+            Atlas_W : constant Float :=
+              Float (Textrender.Atlases.Width (R.State.Atlas));
+            Atlas_H : constant Float :=
+              Float (Textrender.Atlases.Height (R.State.Atlas));
+         begin
+            M.U0 := Float (M.X) / Atlas_W;
+            M.V0 := Float (M.Y) / Atlas_H;
+            M.U1 := Float (M.X + M.W) / Atlas_W;
+            M.V1 := Float (M.Y + M.H) / Atlas_H;
+         end;
 
-      M.Bearing_Y :=
-        Float (G.Bounds.Y_Max) * Scale;
+         M.Advance_X :=
+           Float (G.Advance_X) * Scale;
 
-      pragma Assert (M.W >= 0.0);
-      pragma Assert (M.H >= 0.0);
+         --  For italic the leftmost extent moves to X_Slant_Min font units
+         --  (<= 0) past the original LSB to capture the descender slant.
+         M.Bearing_X :=
+           Float (G.Left_Side_Bearing + X_Slant_Min) * Scale;
+
+         --  Uniform across all glyphs (driven by font ascent, not per-glyph
+         --  Y_Max). This guarantees every atlas top lands at the same screen
+         --  row, so no glyph ever jitters relative to its row-mates.
+         M.Bearing_Y := Float'Floor (Float (Line_Top) * Scale);
+      end;
+
       pragma Assert (M.Advance_X >= 0.0);
       pragma Assert (M.U0 <= M.U1);
       pragma Assert (M.V0 <= M.V1);
@@ -294,23 +489,20 @@ package body Textrender is
          then Glyph_Missing
          else Success);
 
-      Glyph_Cache.Insert
-        (Key      => C,
-         New_Item =>
-           (Status => Return_Status,
-            Metric => M));
+      Cache_Insert (C, (Status => Return_Status, Metric => M));
 
-      Atlas_Dirty_V := True;
+      R.State.Atlas_Dirty_V := True;
 
       return Return_Status;
    end Get_Glyph;
 
    function Place_Glyph_In_Cell
-     (M      : Glyph_Metric;
+     (R      : Renderer;
+      M      : Glyph_Metric;
       Cell_X : Float;
       Cell_Y : Float) return Glyph_Placement
    is
-      Baseline_Y : constant Float := Cell_Y + Ascent;
+      Baseline_Y : constant Float := Cell_Y + Ascent (R);
    begin
       return
         (X => Cell_X + M.Bearing_X,
@@ -321,29 +513,62 @@ package body Textrender is
    -- Atlas Access
    -----------------------------
 
-   function Atlas_Width return Positive is
+   function Atlas_Width (R : Renderer) return Positive is
    begin
-      return Textrender.Atlases.Width (Atlas);
+      return Textrender.Atlases.Width (R.State.Atlas);
    end Atlas_Width;
 
-   function Atlas_Height return Positive is
+   function Atlas_Height (R : Renderer) return Positive is
    begin
-      return Textrender.Atlases.Height (Atlas);
+      return Textrender.Atlases.Height (R.State.Atlas);
    end Atlas_Height;
 
-   function Atlas_Pixels return access constant Alpha_Buffer is
+   function Atlas_Pixels
+     (R : Renderer) return access constant Alpha_Buffer
+   is
    begin
-      return Textrender.Atlases.Pixels (Atlas);
+      return Textrender.Atlases.Pixels (R.State.Atlas);
    end Atlas_Pixels;
 
-   function Atlas_Dirty return Boolean is
+   function Atlas_Dirty (R : Renderer) return Boolean is
    begin
-      return Atlas_Dirty_V;
+      return R.State.Atlas_Dirty_V;
    end Atlas_Dirty;
 
-   procedure Clear_Atlas_Dirty is
+   procedure Clear_Atlas_Dirty (R : in out Renderer) is
    begin
-      Atlas_Dirty_V := False;
+      R.State.Atlas_Dirty_V := False;
    end Clear_Atlas_Dirty;
+
+   -----------------------------
+   -- Preload
+   -----------------------------
+
+   function Preload
+     (R     : in out Renderer;
+      First : Codepoint;
+      Last  : Codepoint) return Status_Code
+   is
+      Discard : Glyph_Metric;
+      Status  : Status_Code;
+   begin
+      if not Textrender.Fonts.Loaded (R.State.Font) then
+         return Font_Not_Loaded;
+      end if;
+
+      if Last < First then
+         return Success;
+      end if;
+
+      for C in First .. Last loop
+         Status := Get_Glyph (R, C, Discard);
+
+         if Status = Atlas_Full then
+            return Atlas_Full;
+         end if;
+      end loop;
+
+      return Success;
+   end Preload;
 
 end Textrender;
