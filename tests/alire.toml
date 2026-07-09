@@ -13,6 +13,9 @@ tags = ["tests"]
 aunit = "^26.0.0"
 
 [[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
 textrender = "*"
 
 [[pins]]

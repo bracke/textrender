@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(alr build *)",
+      "Bash(bin/tests)",
+      "Bash(grep -vE \"\\\\.git|/obj/|/bin/|\\\\.o$|\\\\.ali$\")",
+      "Bash(xargs -I{} basename {})",
+      "Bash(sed -i 's|Cell_Width  => 11|Cell_Width  => 12|g' /home/bent/Projekte/Ada/files/src/files-application.adb /home/bent/Projekte/Ada/files/src/files-application-windows.adb)",
+      "Bash(sed -i 's|Line_Height \\\\* 11 / 20|Line_Height * 12 / 20|g' /home/bent/Projekte/Ada/files/src/files-rendering.adb /home/bent/Projekte/Ada/files/src/files-ui.adb)",
+      "Bash(sed -i 's|Width     => 198,|Width     => 216,|' /home/bent/Projekte/Ada/files/src/files-rendering.adb)",
+      "Bash(/tmp/test_italic)",
+      "Bash(/tmp/test_italic2)",
+      "Bash(sed -i 's|\\(if P \\(Y \\\\* AW + X\\) = 0|\\(if Textrender.\"=\" \\(P \\(Y * AW + X\\), 0\\)|' /tmp/test_italic2.adb)",
+      "Bash(gprbuild -P/tmp/test_italic2.gpr)",
+      "Bash(awk -F. '{print $1}')",
+      "Bash(xargs ls *)",
+      "Bash(grep -n \"Toggle_Selection =>\\\\|Range_Selection  =>\\\\|return\\\\s*$\\\\|Range_Selection =>\" /home/bent/Projekte/Ada/files/src/files-events.adb)"
+    ]
+  }
+}

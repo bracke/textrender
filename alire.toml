@@ -7,3 +7,10 @@ maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = "https://github.com/bracke/textrender"
 tags = ["textrender", "monospace"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[actions]]
+type = "test"
+command = ["sh", "-c", "alr exec -- gnatls --version | grep -q '^GNATLS 15\\.' && cd tests && alr build && ./bin/tests"]
