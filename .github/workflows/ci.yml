@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Linux build and tests
+    runs-on: ubuntu-latest
+    env:
+      ALIRE_NONINTERACTIVE: "true"
+    steps:
+      - name: Check out textrender
+        uses: actions/checkout@v4
+        with:
+          path: textrender
+
+      # tests/alire.toml pins project_tools at ../../project_tools, so it must
+      # exist as a sibling checkout or the manifest will not load.
+      - name: Check out project_tools sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/project_tools
+          path: project_tools
+
+      - name: Set up Alire
+        # Pin the toolchain the manifests require. setup-alire@v5 defaults to alr
+        # 2.1.0, whose index carries gnat_native 15.2.1; v4 pins alr 2.0.2, whose
+        # older index cannot resolve it.
+        uses: alire-project/setup-alire@v5
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Install workflow dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libaunit-dev \
+            || sudo apt-get install -y libaunit22-dev \
+            || sudo apt-get install -y libaunit24-dev
+
+      - name: Build the library
+        working-directory: textrender
+        run: alr --non-interactive build
+
+      - name: Build and run the test suite
+        working-directory: textrender/tests
+        run: |
+          alr --non-interactive build
+          ./bin/tests
