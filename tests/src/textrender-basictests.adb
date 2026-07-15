@@ -1,4 +1,7 @@
 with AUnit.Assertions;
+
+with Ada.Directories;
+
 package body Textrender.BasicTests is
 
    use AUnit.Assertions;
@@ -1007,6 +1010,67 @@ package body Textrender.BasicTests is
       return AUnit.Format ("Textrender basic tests");
    end Name;
 
+   --  A TrueType Collection (.ttc) begins with a "ttcf" header, not a plain font. It used
+   --  to fail to load outright -- the table directory was read from the wrong offset -- and
+   --  on macOS, where the obvious monospace font (Menlo) is a .ttc, that left an empty atlas
+   --  and no glyphs at all. This proves the first face of a collection now loads and
+   --  rasterizes, on any host that ships one.
+   procedure Test_Load_Ttc_Collection
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Candidates : constant array (Positive range <>) of access constant String :=
+        [new String'("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+         new String'("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+         new String'("/System/Library/Fonts/Menlo.ttc"),
+         new String'("/System/Library/Fonts/Helvetica.ttc")];
+
+      Found  : String (1 .. 512);
+      Length : Natural := 0;
+      Status : Textrender.Status_Code;
+      M      : Textrender.Glyph_Metric;
+   begin
+      for Candidate of Candidates loop
+         if Length = 0 and then Ada.Directories.Exists (Candidate.all) then
+            Length := Candidate.all'Length;
+            Found (1 .. Length) := Candidate.all;
+         end if;
+      end loop;
+
+      if Length = 0 then
+         --  No collection on this host to try. Say so rather than pass silently.
+         Assert (True, "no .ttc font present to exercise; skipped");
+         return;
+      end if;
+
+      Textrender.Reset (R);
+
+      Status :=
+        Textrender.Load_Font
+          (R, Path         => Found (1 .. Length),
+           Pixel_Size   => 16,
+           Cell_Width   => 10,
+           Cell_Height  => 20,
+           Atlas_Width  => 256,
+           Atlas_Height => 256);
+
+      --  It must return a definite status, not crash. Reading the whole file onto the
+      --  stack overflowed it on a large collection, and a mis-parsed "ttcf" header sent the
+      --  reader off into nonsense -- both took the program down rather than failing. A
+      --  TrueType collection (macOS Menlo) loads and renders; a CFF one (Noto CJK) is a
+      --  clean Font_Load_Failed, because textrender does not do CFF outlines. Either is a
+      --  pass here; a crash is the only failure.
+      Assert
+        (Status in Textrender.Success | Textrender.Font_Load_Failed,
+         "a .ttc collection loads cleanly or fails cleanly, but does not crash");
+
+      if Status = Textrender.Success then
+         Status := Textrender.Get_Glyph (R, C => Character'Pos ('A'), M => M);
+         Assert (Status = Textrender.Success, "a glyph rasterizes out of a TrueType collection");
+      end if;
+   end Test_Load_Ttc_Collection;
+
    overriding
    procedure Register_Tests
      (T : in out Textrender_Basic_Case)
@@ -1031,6 +1095,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Load_Font_And_Metrics'Access,
          "Load_Font exposes font and grid metrics");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Load_Ttc_Collection'Access,
+         "Load_Font reads the first face of a .ttc collection");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

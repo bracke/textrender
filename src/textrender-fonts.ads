@@ -96,6 +96,11 @@ private
 
       Data : Font_Buffer_Access := null;
 
+      --  Where the sfnt offset table starts. Zero for a plain .ttf/.otf; for a .ttc
+      --  collection (which begins with a "ttcf" header and a list of face offsets) it is
+      --  the offset of the first face. Everything that reads the table directory adds it.
+      Sfnt_Base : Natural := 0;
+
       Head_Table : Table_Info;
       Hhea_Table : Table_Info;
       Maxp_Table : Table_Info;

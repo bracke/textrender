@@ -141,18 +141,18 @@ package body Textrender.Fonts is
    begin
       T := (Found => False, Offset => 0, Length => 0);
 
-      if not Has_Bytes (F, 0, 12) then
+      if not Has_Bytes (F, F.Sfnt_Base, 12) then
          return False;
       end if;
 
-      Num_Tables := U16 (F, 4);
+      Num_Tables := U16 (F, F.Sfnt_Base + 4);
 
-      if not Has_Bytes (F, 12, Num_Tables * 16) then
+      if not Has_Bytes (F, F.Sfnt_Base + 12, Num_Tables * 16) then
          return False;
       end if;
 
       for I in 0 .. Num_Tables - 1 loop
-         Record_Off := 12 + I * 16;
+         Record_Off := F.Sfnt_Base + 12 + I * 16;
 
          if Tag_Matches (F, Record_Off, A, B, C, D) then
             Table_Offset := U32 (F, Record_Off + 8);
@@ -807,26 +807,44 @@ package body Textrender.Fonts is
          Mode => In_File,
          Name => Path);
 
+      --  In fixed-size chunks, not one array the size of the whole file. That array was
+      --  on the stack, so a large font -- a CJK collection is tens of megabytes -- did not
+      --  fail to load, it overflowed the stack and took the program with it.
       declare
-         Buffer : Stream_Element_Array
-           (1 .. Stream_Element_Offset (Size));
+         Chunk : Stream_Element_Array (1 .. 65_536);
+         Into  : Natural := 0;
       begin
-         Read
-           (File => File,
-            Item => Buffer,
-            Last => Last);
+         loop
+            Read (File => File, Item => Chunk, Last => Last);
+            exit when Last < Chunk'First;
+
+            for I in Chunk'First .. Last loop
+               Into := Into + 1;
+               F.Data (Into) := Interfaces.Unsigned_8 (Chunk (I));
+            end loop;
+
+            exit when Last < Chunk'Last;
+         end loop;
 
          Close (File);
 
-         if Natural (Last) /= Size then
+         if Into /= Size then
             Reset (F);
             return Load_Failed;
          end if;
-
-         for I in Buffer'Range loop
-            F.Data (Positive (I)) := Interfaces.Unsigned_8 (Buffer (I));
-         end loop;
       end;
+
+      --  A .ttc collection begins with the tag "ttcf". The real font offset tables are
+      --  listed after a 12-byte header, and the first is what we render with -- one face
+      --  is all the editor asks of it.
+      if Has_Bytes (F, 0, 16)
+        and then Character'Val (F.Data (F.Data'First)) = 't'
+        and then Character'Val (F.Data (F.Data'First + 1)) = 't'
+        and then Character'Val (F.Data (F.Data'First + 2)) = 'c'
+        and then Character'Val (F.Data (F.Data'First + 3)) = 'f'
+      then
+         F.Sfnt_Base := U32 (F, 12);
+      end if;
 
       if not Parse_Tables (F) then
          Reset (F);
