@@ -51,6 +51,11 @@ package Textrender.Fonts is
       C : Codepoint;
       G : out Glyph_Info) return Glyph_Lookup_Result;
 
+   function Lookup_Glyph_By_Index
+     (F           : Font;
+      Glyph_Index : Natural;
+      G           : out Glyph_Info) return Glyph_Lookup_Result;
+
    function Has_Glyph
      (F : Font;
       C : Codepoint) return Boolean;

@@ -29,9 +29,9 @@ package body Textrender.Fonts is
    end Units_Per_Em;
 
       function Num_Glyphs (F : Font) return Natural is
-   begin
-      return F.Num_Glyphs_V;
-   end Num_Glyphs;
+      begin
+         return F.Num_Glyphs_V;
+      end Num_Glyphs;
 
    function Ascent (F : Font) return Integer is
    begin
@@ -380,7 +380,7 @@ package body Textrender.Fonts is
       C     : Codepoint;
       Glyph : out Natural) return Boolean
    is
-      Code : Natural := C;
+      Code : constant Natural := C;
    begin
       Glyph := 0;
 
@@ -410,7 +410,7 @@ package body Textrender.Fonts is
       Id_Delta_Off    : Natural;
       Id_Range_Off    : Natural;
 
-      Code       : Natural := C;
+      Code : constant Natural := C;
       End_Code   : Natural;
       Start_Code : Natural;
       D          : Integer;
@@ -480,38 +480,38 @@ package body Textrender.Fonts is
       Table : Natural;
       C     : Codepoint;
       Glyph : out Natural) return Boolean
-   is
-      Code        : Natural := C;
-      First_Code  : Natural;
-      Entry_Count : Natural;
-      Index       : Natural;
-   begin
-      Glyph := 0;
+      is
+         Code : constant Natural := C;
+         First_Code  : Natural;
+         Entry_Count : Natural;
+         Index       : Natural;
+      begin
+         Glyph := 0;
 
-      --  format(2), length(2), language(2), firstCode(2), entryCount(2)
-      if not Has_Bytes (F, Table, 10) then
-         return False;
-      end if;
+         --  format(2), length(2), language(2), firstCode(2), entryCount(2)
+         if not Has_Bytes (F, Table, 10) then
+            return False;
+         end if;
 
-      First_Code  := U16 (F, Table + 6);
-      Entry_Count := U16 (F, Table + 8);
+         First_Code  := U16 (F, Table + 6);
+         Entry_Count := U16 (F, Table + 8);
 
-      if Code < First_Code
-        or else Code >= First_Code + Entry_Count
-      then
-         return False;
-      end if;
+         if Code < First_Code
+           or else Code >= First_Code + Entry_Count
+         then
+            return False;
+         end if;
 
-      if not Has_Bytes (F, Table + 10, Entry_Count * 2) then
-         return False;
-      end if;
+         if not Has_Bytes (F, Table + 10, Entry_Count * 2) then
+            return False;
+         end if;
 
-      Index := Code - First_Code;
+         Index := Code - First_Code;
 
-      Glyph := U16 (F, Table + 10 + Index * 2);
+         Glyph := U16 (F, Table + 10 + Index * 2);
 
-      return Glyph /= 0;
-   end Lookup_Cmap_Format_6;
+         return Glyph /= 0;
+      end Lookup_Cmap_Format_6;
 
    function Lookup_Cmap_Format_12
      (F     : Font;
@@ -524,7 +524,7 @@ package body Textrender.Fonts is
       Start_Char : Natural;
       End_Char   : Natural;
       Start_Gid  : Natural;
-      Code       : Natural := C;
+      Code : constant Natural := C;
    begin
       Glyph := 0;
 
@@ -706,35 +706,83 @@ package body Textrender.Fonts is
       return Result;
    end Lookup_Glyph;
 
-   function Parse_Tables (F : in out Font) return Boolean is
+   function Lookup_Glyph_By_Index
+     (F           : Font;
+      Glyph_Index : Natural;
+      G           : out Glyph_Info) return Glyph_Lookup_Result
+   is
+      Bounds : Glyph_Bounds;
    begin
-      if not Find_Table (F, 'h', 'e', 'a', 'd', F.Head_Table) then
-         return False;
+      G := (others => <>);
+
+      if not F.Is_Loaded or else Glyph_Index >= F.Num_Glyphs_V then
+         return Glyph_Not_Found;
       end if;
 
-      if not Find_Table (F, 'h', 'h', 'e', 'a', F.Hhea_Table) then
-         return False;
+      if not Read_Glyph_Bounds (F, Glyph_Index, Bounds) then
+         return Glyph_Not_Found;
       end if;
 
-      if not Find_Table (F, 'm', 'a', 'x', 'p', F.Maxp_Table) then
-         return False;
-      end if;
+      declare
+         Metrics_Index : constant Natural :=
+           Metric_Glyph_Index
+             (F           => F,
+              Glyph_Index => Glyph_Index);
+      begin
+         G.Glyph_Index       := Glyph_Index;
+         G.Bounds            := Bounds;
+         G.Advance_X         := Read_Advance_X (F, Metrics_Index);
+         G.Left_Side_Bearing := Read_Left_Side_Bearing (F, Metrics_Index);
+      end;
 
-      if not Find_Table (F, 'h', 'm', 't', 'x', F.Hmtx_Table) then
-         return False;
-      end if;
+      G.Is_Empty :=
+        Bounds.X_Max <= Bounds.X_Min or else Bounds.Y_Max <= Bounds.Y_Min;
+      G.Used_Fallback := False;
 
-      if not Find_Table (F, 'c', 'm', 'a', 'p', F.Cmap_Table) then
-         return False;
-      end if;
+      return Glyph_Found;
+   end Lookup_Glyph_By_Index;
 
-      if not Find_Table (F, 'l', 'o', 'c', 'a', F.Loca_Table) then
+   function Parse_Tables (F : in out Font) return Boolean is
+      --  Find_Table writes its out parameter before it reads F, so passing a
+      --  component of F directly made the actual overlap the writable formal
+      --  and left the result dependent on by-copy vs by-reference passing.
+      --  Collect into a local and store afterwards.
+      Info : Table_Info;
+   begin
+      if not Find_Table (F, 'h', 'e', 'a', 'd', Info) then
          return False;
       end if;
+      F.Head_Table := Info;
 
-      if not Find_Table (F, 'g', 'l', 'y', 'f', F.Glyf_Table) then
+      if not Find_Table (F, 'h', 'h', 'e', 'a', Info) then
          return False;
       end if;
+      F.Hhea_Table := Info;
+
+      if not Find_Table (F, 'm', 'a', 'x', 'p', Info) then
+         return False;
+      end if;
+      F.Maxp_Table := Info;
+
+      if not Find_Table (F, 'h', 'm', 't', 'x', Info) then
+         return False;
+      end if;
+      F.Hmtx_Table := Info;
+
+      if not Find_Table (F, 'c', 'm', 'a', 'p', Info) then
+         return False;
+      end if;
+      F.Cmap_Table := Info;
+
+      if not Find_Table (F, 'l', 'o', 'c', 'a', Info) then
+         return False;
+      end if;
+      F.Loca_Table := Info;
+
+      if not Find_Table (F, 'g', 'l', 'y', 'f', Info) then
+         return False;
+      end if;
+      F.Glyf_Table := Info;
 
       if F.Head_Table.Length < 54
         or else F.Hhea_Table.Length < 36
@@ -743,11 +791,18 @@ package body Textrender.Fonts is
          return False;
       end if;
 
-      F.Units_Per_Em_V := U16 (F, F.Head_Table.Offset + 18);
+      --  unitsPerEm comes straight off the wire and Units_Per_Em_V is Positive,
+      --  so assigning first turned a malformed font (unitsPerEm = 0) into a
+      --  Constraint_Error and left the check below unreachable. Validate first.
+      declare
+         Units_Per_Em : constant Natural := U16 (F, F.Head_Table.Offset + 18);
+      begin
+         if Units_Per_Em = 0 then
+            return False;
+         end if;
 
-      if F.Units_Per_Em_V = 0 then
-         return False;
-      end if;
+         F.Units_Per_Em_V := Units_Per_Em;
+      end;
 
       F.Index_To_Loc_Format_V := I16 (F, F.Head_Table.Offset + 50);
 

@@ -6,7 +6,7 @@ package body Textrender.Atlases is
      (Alpha_Buffer, Alpha_Buffer_Access);
 
    -----------------------------
-   -- Init
+   --  Init
    -----------------------------
 
    procedure Init
@@ -14,7 +14,7 @@ package body Textrender.Atlases is
       Width  : Positive;
       Height : Positive)
    is
-      Size : Natural := Width * Height;
+      Size : constant Natural := Width * Height;
    begin
       Reset (A);
 
@@ -31,7 +31,7 @@ package body Textrender.Atlases is
    end Init;
 
    -----------------------------
-   -- Reset
+   --  Reset
    -----------------------------
 
    procedure Reset (A : in out Atlas) is
@@ -50,7 +50,7 @@ package body Textrender.Atlases is
    end Reset;
 
    -----------------------------
-   -- Dimensions
+   --  Dimensions
    -----------------------------
 
    function Width (A : Atlas) return Positive is
@@ -64,7 +64,7 @@ package body Textrender.Atlases is
    end Height;
 
    -----------------------------
-   -- Pixels
+   --  Pixels
    -----------------------------
 
    function Pixels
@@ -75,7 +75,7 @@ package body Textrender.Atlases is
    end Pixels;
 
    -----------------------------
-   -- Clear
+   --  Clear
    -----------------------------
 
    procedure Clear (A : in out Atlas) is
@@ -88,7 +88,7 @@ package body Textrender.Atlases is
    end Clear;
 
    -----------------------------
-   -- Allocate_Rect
+   --  Allocate_Rect
    -----------------------------
 
    function Allocate_Rect
@@ -126,7 +126,7 @@ package body Textrender.Atlases is
    end Allocate_Rect;
 
    -----------------------------
-   -- Write_Pixel
+   --  Write_Pixel
    -----------------------------
 
    procedure Write_Pixel
@@ -151,7 +151,7 @@ package body Textrender.Atlases is
    end Write_Pixel;
 
    -----------------------------
-   -- Blend_Max
+   --  Blend_Max
    -----------------------------
 
    procedure Blend_Max

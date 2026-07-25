@@ -2,9 +2,13 @@ with AUnit.Assertions;
 
 with Ada.Directories;
 
+with Textrender.Fonts;
+
 package body Textrender.BasicTests is
 
    use AUnit.Assertions;
+   use type Textrender.Fonts.Glyph_Lookup_Result;
+   use type Textrender.Fonts.Load_Result;
 
    Font_Path : constant String :=
      "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
@@ -328,6 +332,89 @@ package body Textrender.BasicTests is
       Assert (M1.V1 = M2.V1, "Cached glyph V1 should match");
    end Test_Glyph_Cache_Does_Not_Rewrite_Atlas;
 
+   procedure Test_Get_Glyph_By_Index
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Font          : Textrender.Fonts.Font;
+      Font_Glyph    : Textrender.Fonts.Glyph_Info;
+      Lookup_Status : Textrender.Fonts.Glyph_Lookup_Result;
+      Status_1      : Textrender.Status_Code;
+      Status_2      : Textrender.Status_Code;
+      M1            : Textrender.Glyph_Metric;
+      M2            : Textrender.Glyph_Metric;
+      Checksum_1    : Natural;
+      Checksum_2    : Natural;
+   begin
+      Textrender.Reset (R);
+
+      Assert
+        (Textrender.Fonts.Load (Font, Font_Path) = Textrender.Fonts.Loaded,
+         "test font should load for glyph-index lookup");
+
+      Lookup_Status :=
+        Textrender.Fonts.Lookup_Glyph
+          (Font,
+           Textrender.Fonts.Codepoint (Character'Pos ('A')),
+           Font_Glyph);
+      Assert
+        (Lookup_Status = Textrender.Fonts.Glyph_Found,
+         "test font should map A to a glyph index");
+
+      Assert
+        (Textrender.Load_Font
+           (R, Path         => Font_Path,
+            Pixel_Size   => 16,
+            Cell_Width   => 10,
+            Cell_Height  => 20,
+            Atlas_Width  => 256,
+            Atlas_Height => 256)
+         = Textrender.Success,
+         "Load_Font should succeed");
+
+      Status_1 :=
+        Textrender.Get_Glyph_By_Index
+          (R,
+           Glyph_Index => Font_Glyph.Glyph_Index,
+           M           => M1);
+      Assert
+        (Status_1 = Textrender.Success,
+         "Get_Glyph_By_Index should rasterize A's glyph index");
+      Assert (M1.W > 0, "glyph-index width should be positive");
+      Assert (M1.H > 0, "glyph-index height should be positive");
+      Assert (M1.Advance_X > 0.0, "glyph-index advance should be positive");
+
+      Checksum_1 := Atlas_Checksum;
+
+      Status_2 :=
+        Textrender.Get_Glyph_By_Index
+          (R,
+           Glyph_Index => Font_Glyph.Glyph_Index,
+           M           => M2);
+      Assert
+        (Status_2 = Textrender.Success,
+         "cached Get_Glyph_By_Index should succeed");
+
+      Checksum_2 := Atlas_Checksum;
+
+      Assert
+        (Checksum_1 = Checksum_2,
+         "cached Get_Glyph_By_Index should not rewrite atlas pixels");
+      Assert (M1.X = M2.X, "cached glyph-index X should match");
+      Assert (M1.Y = M2.Y, "cached glyph-index Y should match");
+      Assert (M1.U0 = M2.U0, "cached glyph-index U0 should match");
+      Assert (M1.V0 = M2.V0, "cached glyph-index V0 should match");
+      Assert (M1.U1 = M2.U1, "cached glyph-index U1 should match");
+      Assert (M1.V1 = M2.V1, "cached glyph-index V1 should match");
+
+      Textrender.Fonts.Reset (Font);
+   exception
+      when others =>
+         Textrender.Fonts.Reset (Font);
+         raise;
+   end Test_Get_Glyph_By_Index;
+
    procedure Test_ASCII_Range
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -404,41 +491,6 @@ package body Textrender.BasicTests is
       (M.Advance_X > 0.0,
          "Exclamation glyph should have positive advance");
    end Test_Get_Glyph_Exclamation;
-
-   procedure Test_DumpImage
-   (T : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T);
-
-      Status : Textrender.Status_Code;
-      M      : Textrender.Glyph_Metric;
-   begin
-
-      Textrender.Reset (R);
-
-      pragma Assert
-      (Textrender.Load_Font
-         (R, Path         => Font_Path,
-            Pixel_Size   => 32,
-            Cell_Width   => 20,
-            Cell_Height  => 40,
-            Atlas_Width  => 256,
-            Atlas_Height => 256)
-         = Textrender.Success);
-
-      for C in Character'Pos (' ') .. Character'Pos ('~') loop
-         declare
-            S : constant Textrender.Status_Code :=
-            Textrender.Get_Glyph (R, C => C, M => M);
-         begin
-            null; -- ignore status here
-         end;
-      end loop;
-
-      --  Atlas debug dumps are intentionally not written by default;
-      --  generated image artifacts do not belong in the release tree.
-
-   end Test_DumpImage;
 
    procedure Test_Baseline_Placement_Metrics
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1020,7 +1072,8 @@ package body Textrender.BasicTests is
    is
       pragma Unreferenced (T);
 
-      Candidates : constant array (Positive range <>) of access constant String :=
+      type Constant_String_Access is access constant String;
+      Candidates : constant array (Positive range <>) of Constant_String_Access :=
         [new String'("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
          new String'("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
          new String'("/System/Library/Fonts/Menlo.ttc"),
@@ -1125,6 +1178,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Glyph_Cache_Does_Not_Rewrite_Atlas'Access,
          "Glyph Cache Does Not Rewrite Atlas");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Get_Glyph_By_Index'Access,
+         "Get Glyph By Index");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

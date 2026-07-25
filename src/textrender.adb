@@ -16,15 +16,22 @@ package body Textrender is
    function Codepoint_Hash (C : Codepoint) return Hash_Type is
      (Hash_Type (C));
 
+   function Natural_Hash (N : Natural) return Hash_Type is
+     (Hash_Type (N));
+
    package Glyph_Caches is new Ada.Containers.Hashed_Maps
      (Key_Type        => Codepoint,
       Element_Type    => Cached_Glyph,
       Hash            => Codepoint_Hash,
       Equivalent_Keys => "=");
 
-   Glyph_Padding : constant Natural := 1;
+   package Glyph_Index_Caches is new Ada.Containers.Hashed_Maps
+     (Key_Type        => Natural,
+      Element_Type    => Cached_Glyph,
+      Hash            => Natural_Hash,
+      Equivalent_Keys => "=");
 
-   use type Textrender.Fonts.Glyph_Lookup_Result;
+   Glyph_Padding : constant Natural := 1;
 
    --  Tangent of the slant angle. 0.0 = upright. ~0.21 corresponds to a
    --  12-degree oblique, a typical italic tilt.
@@ -50,6 +57,8 @@ package body Textrender is
       Atlas         : Textrender.Atlases.Atlas;
       Cache         : Glyph_Caches.Map;
       Italic_Cache  : Glyph_Caches.Map;
+      Glyph_Index_Cache : Glyph_Index_Caches.Map;
+      Italic_Glyph_Index_Cache : Glyph_Index_Caches.Map;
       Pixel_Size    : Positive := 1;
       Cell_Width_V  : Positive := 1;
       Cell_Height_V : Positive := 1;
@@ -80,7 +89,7 @@ package body Textrender is
    end Ensure_State;
 
    -----------------------------
-   -- Initialize / Finalize
+   --  Initialize / Finalize
    -----------------------------
 
    overriding procedure Initialize (R : in out Renderer) is
@@ -96,12 +105,14 @@ package body Textrender is
          Textrender.Atlases.Reset (R.State.Atlas);
          R.State.Cache.Clear;
          R.State.Italic_Cache.Clear;
+         R.State.Glyph_Index_Cache.Clear;
+         R.State.Italic_Glyph_Index_Cache.Clear;
          Free_State (R.State);
       end if;
    end Finalize;
 
    -----------------------------
-   -- Reset
+   --  Reset
    -----------------------------
 
    procedure Reset (R : in out Renderer) is
@@ -114,6 +125,8 @@ package body Textrender is
 
       R.State.Cache.Clear;
       R.State.Italic_Cache.Clear;
+      R.State.Glyph_Index_Cache.Clear;
+      R.State.Italic_Glyph_Index_Cache.Clear;
 
       R.State.Pixel_Size    := 1;
       R.State.Cell_Width_V  := 1;
@@ -123,7 +136,7 @@ package body Textrender is
    end Reset;
 
    -----------------------------
-   -- Load_Font
+   --  Load_Font
    -----------------------------
 
    function Load_Font
@@ -160,7 +173,7 @@ package body Textrender is
    end Load_Font;
 
    -----------------------------
-   -- Add_Fallback_Font
+   --  Add_Fallback_Font
    -----------------------------
 
    function Add_Fallback_Font
@@ -191,7 +204,7 @@ package body Textrender is
    end Add_Fallback_Font;
 
    -----------------------------
-   -- Metrics
+   --  Metrics
    -----------------------------
 
    function Ascent (R : Renderer) return Float is
@@ -237,7 +250,7 @@ package body Textrender is
    end Has_Glyph;
 
    -----------------------------
-   -- Get_Glyph
+   --  Get_Glyph
    -----------------------------
 
    function Get_Glyph
@@ -496,6 +509,193 @@ package body Textrender is
       return Return_Status;
    end Get_Glyph;
 
+   function Get_Glyph_By_Index
+     (R           : in out Renderer;
+      Glyph_Index : Natural;
+      M           : out Glyph_Metric;
+      Style       : Font_Style := Regular) return Status_Code
+   is
+      procedure Cache_Insert (Key : Natural; Item : Cached_Glyph) is
+      begin
+         case Style is
+            when Regular => R.State.Glyph_Index_Cache.Insert (Key, Item);
+            when Italic  => R.State.Italic_Glyph_Index_Cache.Insert (Key, Item);
+         end case;
+      end Cache_Insert;
+
+      function Cache_Contains (Key : Natural) return Boolean is
+        (case Style is
+           when Regular => R.State.Glyph_Index_Cache.Contains (Key),
+           when Italic  => R.State.Italic_Glyph_Index_Cache.Contains (Key));
+
+      function Cache_Element (Key : Natural) return Cached_Glyph is
+        (case Style is
+           when Regular => R.State.Glyph_Index_Cache.Element (Key),
+           when Italic  => R.State.Italic_Glyph_Index_Cache.Element (Key));
+
+      G      : Textrender.Fonts.Glyph_Info;
+      Pack_X : Natural;
+      Pack_Y : Natural;
+      Atlas_X : Natural;
+      Atlas_Y : Natural;
+      Scale  : Float;
+      Glyph_W : Positive;
+      Glyph_H : Positive;
+      Raw_W : Float;
+      Raw_H : Float;
+   begin
+      if not Textrender.Fonts.Loaded (R.State.Font) then
+         return Font_Not_Loaded;
+      end if;
+
+      if Cache_Contains (Glyph_Index) then
+         declare
+            Cached : constant Cached_Glyph := Cache_Element (Glyph_Index);
+         begin
+            M := Cached.Metric;
+            return Cached.Status;
+         end;
+      end if;
+
+      if Textrender.Fonts.Lookup_Glyph_By_Index
+        (R.State.Font, Glyph_Index, G) /= Textrender.Fonts.Glyph_Found
+      then
+         return Glyph_Missing;
+      end if;
+
+      Scale :=
+        Float (R.State.Pixel_Size)
+        / Float (Textrender.Fonts.Units_Per_Em (R.State.Font));
+
+      if G.Is_Empty then
+         M.X := 0;
+         M.Y := 0;
+         M.W := 0;
+         M.H := 0;
+         M.U0 := 0.0;
+         M.V0 := 0.0;
+         M.U1 := 0.0;
+         M.V1 := 0.0;
+         M.Advance_X := Float (G.Advance_X) * Scale;
+         M.Bearing_X := Float (G.Left_Side_Bearing) * Scale;
+         M.Bearing_Y := 0.0;
+         Cache_Insert (Glyph_Index, (Status => Success, Metric => M));
+         return Success;
+      end if;
+
+      declare
+         Font_Ascent  : constant Integer :=
+           Textrender.Fonts.Ascent (R.State.Font);
+         Font_Descent : constant Integer :=
+           Textrender.Fonts.Descent (R.State.Font);
+         Line_Top     : constant Integer :=
+           Integer'Max (Font_Ascent, G.Bounds.Y_Max);
+         Line_Bottom  : constant Integer :=
+           Integer'Min (Font_Descent, G.Bounds.Y_Min);
+         Slant        : constant Float := Slant_For (Style);
+         X_Slant_Min  : constant Integer :=
+           (if Slant > 0.0 and then Line_Bottom < 0
+            then Integer (Float (Line_Bottom) * Slant - 0.999)
+            else 0);
+         X_Slant_Max  : constant Integer :=
+           (if Slant > 0.0 and then Line_Top > 0
+            then Integer (Float (Line_Top) * Slant + 0.999)
+            else 0);
+         X_Min_Adj    : constant Integer := G.Bounds.X_Min + X_Slant_Min;
+         X_Max_Adj    : constant Integer := G.Bounds.X_Max + X_Slant_Max;
+      begin
+         Raw_W := Float (X_Max_Adj - X_Min_Adj) * Scale;
+         Raw_H := Float (Line_Top - Line_Bottom) * Scale;
+
+         Glyph_W :=
+           (if Raw_W <= 0.0 then 1
+            else Positive (Integer (Raw_W + 0.999)));
+         Glyph_H :=
+           (if Raw_H <= 0.0 then 1
+            else Positive (Integer (Raw_H + 0.999)));
+
+         if not Textrender.Atlases.Allocate_Rect
+           (R.State.Atlas,
+            W => Glyph_W + Glyph_Padding * 2,
+            H => Glyph_H + Glyph_Padding * 2,
+            X => Pack_X,
+            Y => Pack_Y)
+         then
+            return Atlas_Full;
+         end if;
+
+         Atlas_X := Pack_X + Glyph_Padding;
+         Atlas_Y := Pack_Y + Glyph_Padding;
+
+         if not Textrender.Rasterizer.Rasterize_Glyph
+           (F           => R.State.Font,
+            A           => R.State.Atlas,
+            Glyph_Index => G.Glyph_Index,
+            Atlas_X     => Atlas_X,
+            Atlas_Y     => Atlas_Y,
+            Glyph_W     => Glyph_W,
+            Glyph_H     => Glyph_H,
+            X_Min       => X_Min_Adj,
+            Y_Min       => Line_Bottom,
+            X_Max       => X_Max_Adj,
+            Y_Max       => Line_Top,
+            Pixel_Size  => R.State.Pixel_Size,
+            Transform   =>
+              (XX => 1.0,
+               XY => Slant,
+               YX => 0.0,
+               YY => 1.0,
+               DX => 0.0,
+               DY => 0.0))
+         then
+            M := (X         => 0,
+                  Y         => 0,
+                  W         => 0,
+                  H         => 0,
+                  U0        => 0.0,
+                  V0        => 0.0,
+                  U1        => 0.0,
+                  V1        => 0.0,
+                  Advance_X => Float (G.Advance_X) * Scale,
+                  Bearing_X => Float (G.Left_Side_Bearing) * Scale,
+                  Bearing_Y => 0.0);
+            Cache_Insert
+              (Glyph_Index, (Status => Rasterize_Failed, Metric => M));
+            return Rasterize_Failed;
+         end if;
+
+         M.X := Atlas_X;
+         M.Y := Atlas_Y;
+         M.W := Glyph_W;
+         M.H := Glyph_H;
+
+         declare
+            Atlas_W : constant Float :=
+              Float (Textrender.Atlases.Width (R.State.Atlas));
+            Atlas_H : constant Float :=
+              Float (Textrender.Atlases.Height (R.State.Atlas));
+         begin
+            M.U0 := Float (M.X) / Atlas_W;
+            M.V0 := Float (M.Y) / Atlas_H;
+            M.U1 := Float (M.X + M.W) / Atlas_W;
+            M.V1 := Float (M.Y + M.H) / Atlas_H;
+         end;
+
+         M.Advance_X := Float (G.Advance_X) * Scale;
+         M.Bearing_X := Float (G.Left_Side_Bearing + X_Slant_Min) * Scale;
+         M.Bearing_Y := Float'Floor (Float (Line_Top) * Scale);
+      end;
+
+      pragma Assert (M.Advance_X >= 0.0);
+      pragma Assert (M.U0 <= M.U1);
+      pragma Assert (M.V0 <= M.V1);
+
+      Cache_Insert (Glyph_Index, (Status => Success, Metric => M));
+      R.State.Atlas_Dirty_V := True;
+
+      return Success;
+   end Get_Glyph_By_Index;
+
    function Place_Glyph_In_Cell
      (R      : Renderer;
       M      : Glyph_Metric;
@@ -510,7 +710,7 @@ package body Textrender is
    end Place_Glyph_In_Cell;
 
    -----------------------------
-   -- Atlas Access
+   --  Atlas Access
    -----------------------------
 
    function Atlas_Width (R : Renderer) return Positive is
@@ -541,7 +741,7 @@ package body Textrender is
    end Clear_Atlas_Dirty;
 
    -----------------------------
-   -- Preload
+   --  Preload
    -----------------------------
 
    function Preload

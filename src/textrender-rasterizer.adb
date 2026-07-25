@@ -1,4 +1,3 @@
-with Textrender.Fonts;
 with Ada.Containers; use Ada.Containers;
 with Ada.Containers.Vectors;
 
@@ -46,43 +45,43 @@ package body Textrender.Rasterizer is
    Active_Segments_Buffer : Natural_Vectors.Vector;
 
       procedure Prepare_Buffers is
-   begin
-      End_Points_Buffer.Clear;
-      Flags_Buffer.Clear;
-      Xs_Buffer.Clear;
-      Ys_Buffer.Clear;
-      Points_Buffer.Clear;
-      Segments_Buffer.Clear;
-      Active_Segments_Buffer.Clear;
+      begin
+         End_Points_Buffer.Clear;
+         Flags_Buffer.Clear;
+         Xs_Buffer.Clear;
+         Ys_Buffer.Clear;
+         Points_Buffer.Clear;
+         Segments_Buffer.Clear;
+         Active_Segments_Buffer.Clear;
 
-      if End_Points_Buffer.Capacity < Initial_Contour_Capacity then
-         End_Points_Buffer.Reserve_Capacity (Initial_Contour_Capacity);
-      end if;
+         if End_Points_Buffer.Capacity < Initial_Contour_Capacity then
+            End_Points_Buffer.Reserve_Capacity (Initial_Contour_Capacity);
+         end if;
 
-      if Flags_Buffer.Capacity < Initial_Point_Capacity then
-         Flags_Buffer.Reserve_Capacity (Initial_Point_Capacity);
-      end if;
+         if Flags_Buffer.Capacity < Initial_Point_Capacity then
+            Flags_Buffer.Reserve_Capacity (Initial_Point_Capacity);
+         end if;
 
-      if Xs_Buffer.Capacity < Initial_Point_Capacity then
-         Xs_Buffer.Reserve_Capacity (Initial_Point_Capacity);
-      end if;
+         if Xs_Buffer.Capacity < Initial_Point_Capacity then
+            Xs_Buffer.Reserve_Capacity (Initial_Point_Capacity);
+         end if;
 
-      if Ys_Buffer.Capacity < Initial_Point_Capacity then
-         Ys_Buffer.Reserve_Capacity (Initial_Point_Capacity);
-      end if;
+         if Ys_Buffer.Capacity < Initial_Point_Capacity then
+            Ys_Buffer.Reserve_Capacity (Initial_Point_Capacity);
+         end if;
 
-      if Points_Buffer.Capacity < Initial_Point_Capacity then
-         Points_Buffer.Reserve_Capacity (Initial_Point_Capacity);
-      end if;
+         if Points_Buffer.Capacity < Initial_Point_Capacity then
+            Points_Buffer.Reserve_Capacity (Initial_Point_Capacity);
+         end if;
 
-      if Segments_Buffer.Capacity < Initial_Segment_Capacity then
-         Segments_Buffer.Reserve_Capacity (Initial_Segment_Capacity);
-      end if;
+         if Segments_Buffer.Capacity < Initial_Segment_Capacity then
+            Segments_Buffer.Reserve_Capacity (Initial_Segment_Capacity);
+         end if;
 
-      if Active_Segments_Buffer.Capacity < Initial_Segment_Capacity then
-         Active_Segments_Buffer.Reserve_Capacity (Initial_Segment_Capacity);
-      end if;
-   end Prepare_Buffers;
+         if Active_Segments_Buffer.Capacity < Initial_Segment_Capacity then
+            Active_Segments_Buffer.Reserve_Capacity (Initial_Segment_Capacity);
+         end if;
+      end Prepare_Buffers;
 
    function Bit_Set
      (Value : Natural;
@@ -127,35 +126,35 @@ package body Textrender.Rasterizer is
       CY       : Float;
       X1       : Float;
       Y1       : Float)
-   is
-      Steps : constant Positive := 8;
+      is
+         Steps : constant Positive := 8;
 
-      Prev_X : Float := X0;
-      Prev_Y : Float := Y0;
+         Prev_X : Float := X0;
+         Prev_Y : Float := Y0;
 
-      T  : Float;
-      MT : Float;
-      NX : Float;
-      NY : Float;
-   begin
-      for I in 1 .. Steps loop
-         T  := Float (I) / Float (Steps);
-         MT := 1.0 - T;
+         T  : Float;
+         MT : Float;
+         NX : Float;
+         NY : Float;
+      begin
+         for I in 1 .. Steps loop
+            T  := Float (I) / Float (Steps);
+            MT := 1.0 - T;
 
-         NX := MT * MT * X0 + 2.0 * MT * T * CX + T * T * X1;
-         NY := MT * MT * Y0 + 2.0 * MT * T * CY + T * T * Y1;
+            NX := MT * MT * X0 + 2.0 * MT * T * CX + T * T * X1;
+            NY := MT * MT * Y0 + 2.0 * MT * T * CY + T * T * Y1;
 
-         Add_Segment
-           (Segments => Segments,
-            X0       => Prev_X,
-            Y0       => Prev_Y,
-            X1       => NX,
-            Y1       => NY);
+            Add_Segment
+              (Segments => Segments,
+               X0       => Prev_X,
+               Y0       => Prev_Y,
+               X1       => NX,
+               Y1       => NY);
 
-         Prev_X := NX;
-         Prev_Y := NY;
-      end loop;
-   end Add_Quadratic;
+            Prev_X := NX;
+            Prev_Y := NY;
+         end loop;
+      end Add_Quadratic;
 
    function Rasterize_Simple_Glyph
      (F           : Textrender.Fonts.Font;
@@ -172,6 +171,9 @@ package body Textrender.Rasterizer is
       Pixel_Size  : Positive;
       Transform   : Glyph_Transform) return Boolean
    is
+      --  Y_Min and X_Max belong to the glyph-box signature these callers pass;
+      --  only the X_Min/Y_Max corner is needed here.
+      pragma Unreferenced (Y_Min, X_Max);
       G0 : Natural;
       G1 : Natural;
 
@@ -184,8 +186,6 @@ package body Textrender.Rasterizer is
       Points         : Glyph_Point_Vectors.Vector renames Points_Buffer;
       Segments       : Segment_Vectors.Vector renames Segments_Buffer;
       Active_Segments : Natural_Vectors.Vector renames Active_Segments_Buffer;
-
-      Segment_Count : Natural := 0;
 
       End_Points_Off : Natural;
       Instr_Len_Off  : Natural;
@@ -415,7 +415,7 @@ package body Textrender.Rasterizer is
          return False;
       end if;
 
-       if G1 < G0 then
+      if G1 < G0 then
          return False;
       elsif G1 = G0 then
          return True;
@@ -476,7 +476,7 @@ package body Textrender.Rasterizer is
             Xs.Append (0);
             Ys.Append (0);
             Points.Append (Glyph_Point'(X => 0.0, Y => 0.0, On_Curve => False));
-         end loop;
+      end loop;
       P := 0;
 
       while P < Point_Count loop
@@ -597,8 +597,11 @@ package body Textrender.Rasterizer is
             First := End_Points (C) + 1;
          end loop;
       end;
+      --  Segments is the accumulator; a stubbed-out "Segment_Count : constant
+      --  Natural := 0" used to stand here, which made this assertion state
+      --  0 > 0 and fail unconditionally whenever assertions were enabled.
       pragma Assert
-      (Segment_Count > 0,
+        (not Segments.Is_Empty,
          "No segments generated for non-empty simple glyph");
       declare
          Samples_Per_Axis : constant Positive := 8;

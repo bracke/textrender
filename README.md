@@ -3,6 +3,10 @@
 Textrender renders TrueType glyphs into a monospace text atlas for editor-style
 rendering.
 
+The public API supports both Unicode codepoint lookup (`Get_Glyph`) and direct
+primary-font glyph-index lookup (`Get_Glyph_By_Index`) for callers that perform
+text shaping externally.
+
 ## Toolchain
 
 Textrender must be built and validated with Alire GNAT 15. The root and tests

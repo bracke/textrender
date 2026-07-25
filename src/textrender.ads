@@ -262,6 +262,18 @@ package Textrender is
       M     : out Glyph_Metric;
       Style : Font_Style := Regular) return Status_Code;
 
+   --  Return glyph metrics and atlas coordinates for a concrete font glyph
+   --  index in the primary loaded font.
+   --
+   --  This is intended for callers that already performed shaping and received
+   --  glyph IDs from the same primary font face. It does not perform Unicode
+   --  cmap lookup and it does not consult fallback fonts.
+   function Get_Glyph_By_Index
+     (R           : in out Renderer;
+      Glyph_Index : Natural;
+      M           : out Glyph_Metric;
+      Style       : Font_Style := Regular) return Status_Code;
+
    --  Compute glyph bitmap placement for a grid cell.
    --
    --  Cell_X and Cell_Y are the top-left corner of the editor cell.
