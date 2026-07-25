@@ -408,6 +408,32 @@ package body Textrender.BasicTests is
       Assert (M1.U1 = M2.U1, "cached glyph-index U1 should match");
       Assert (M1.V1 = M2.V1, "cached glyph-index V1 should match");
 
+      Textrender.Reset (R);
+      Assert
+        (Textrender.Load_Font
+           (R, Path         => Font_Path,
+            Pixel_Size   => 16,
+            Cell_Width   => 10,
+            Cell_Height  => 20,
+            Atlas_Width  => 256,
+            Atlas_Height => 256)
+         = Textrender.Success,
+         "Load_Font should succeed for fallback glyph-index test");
+      Assert
+        (Textrender.Add_Fallback_Font (R, Font_Path) = Textrender.Success,
+         "Add_Fallback_Font should succeed for glyph-index test");
+
+      Status_1 :=
+        Textrender.Get_Glyph_By_Index
+          (R,
+           Glyph_Index => Font_Glyph.Glyph_Index,
+           M           => M1,
+           Font_Index  => 1);
+      Assert
+        (Status_1 = Textrender.Success,
+         "Get_Glyph_By_Index should rasterize from fallback font index");
+      Assert (M1.W > 0, "fallback glyph-index width should be positive");
+
       Textrender.Fonts.Reset (Font);
    exception
       when others =>

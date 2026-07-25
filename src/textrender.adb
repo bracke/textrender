@@ -16,8 +16,13 @@ package body Textrender is
    function Codepoint_Hash (C : Codepoint) return Hash_Type is
      (Hash_Type (C));
 
-   function Natural_Hash (N : Natural) return Hash_Type is
-     (Hash_Type (N));
+   type Glyph_Index_Key is record
+      Font_Index  : Natural := 0;
+      Glyph_Index : Natural := 0;
+   end record;
+
+   function Glyph_Index_Key_Hash (Key : Glyph_Index_Key) return Hash_Type is
+     (Hash_Type (Key.Font_Index * 1_048_583 + Key.Glyph_Index));
 
    package Glyph_Caches is new Ada.Containers.Hashed_Maps
      (Key_Type        => Codepoint,
@@ -26,9 +31,9 @@ package body Textrender is
       Equivalent_Keys => "=");
 
    package Glyph_Index_Caches is new Ada.Containers.Hashed_Maps
-     (Key_Type        => Natural,
+     (Key_Type        => Glyph_Index_Key,
       Element_Type    => Cached_Glyph,
-      Hash            => Natural_Hash,
+      Hash            => Glyph_Index_Key_Hash,
       Equivalent_Keys => "=");
 
    Glyph_Padding : constant Natural := 1;
@@ -513,9 +518,13 @@ package body Textrender is
      (R           : in out Renderer;
       Glyph_Index : Natural;
       M           : out Glyph_Metric;
+      Font_Index  : Natural := 0;
       Style       : Font_Style := Regular) return Status_Code
    is
-      procedure Cache_Insert (Key : Natural; Item : Cached_Glyph) is
+      Key : constant Glyph_Index_Key :=
+        (Font_Index => Font_Index, Glyph_Index => Glyph_Index);
+
+      procedure Cache_Insert (Item : Cached_Glyph) is
       begin
          case Style is
             when Regular => R.State.Glyph_Index_Cache.Insert (Key, Item);
@@ -523,34 +532,43 @@ package body Textrender is
          end case;
       end Cache_Insert;
 
-      function Cache_Contains (Key : Natural) return Boolean is
+      function Cache_Contains return Boolean is
         (case Style is
            when Regular => R.State.Glyph_Index_Cache.Contains (Key),
            when Italic  => R.State.Italic_Glyph_Index_Cache.Contains (Key));
 
-      function Cache_Element (Key : Natural) return Cached_Glyph is
+      function Cache_Element return Cached_Glyph is
         (case Style is
            when Regular => R.State.Glyph_Index_Cache.Element (Key),
            when Italic  => R.State.Italic_Glyph_Index_Cache.Element (Key));
 
-      G      : Textrender.Fonts.Glyph_Info;
-      Pack_X : Natural;
-      Pack_Y : Natural;
+      Selected : Textrender.Fonts.Font;
+      G       : Textrender.Fonts.Glyph_Info;
+      Pack_X  : Natural;
+      Pack_Y  : Natural;
       Atlas_X : Natural;
       Atlas_Y : Natural;
-      Scale  : Float;
+      Scale   : Float;
       Glyph_W : Positive;
       Glyph_H : Positive;
-      Raw_W : Float;
-      Raw_H : Float;
+      Raw_W   : Float;
+      Raw_H   : Float;
    begin
       if not Textrender.Fonts.Loaded (R.State.Font) then
          return Font_Not_Loaded;
       end if;
 
-      if Cache_Contains (Glyph_Index) then
+      if Font_Index = 0 then
+         Selected := R.State.Font;
+      elsif Font_Index <= Natural (R.State.Fallbacks.Length) then
+         Selected := R.State.Fallbacks.Element (Positive (Font_Index));
+      else
+         return Glyph_Missing;
+      end if;
+
+      if Cache_Contains then
          declare
-            Cached : constant Cached_Glyph := Cache_Element (Glyph_Index);
+            Cached : constant Cached_Glyph := Cache_Element;
          begin
             M := Cached.Metric;
             return Cached.Status;
@@ -558,14 +576,14 @@ package body Textrender is
       end if;
 
       if Textrender.Fonts.Lookup_Glyph_By_Index
-        (R.State.Font, Glyph_Index, G) /= Textrender.Fonts.Glyph_Found
+        (Selected, Glyph_Index, G) /= Textrender.Fonts.Glyph_Found
       then
          return Glyph_Missing;
       end if;
 
       Scale :=
         Float (R.State.Pixel_Size)
-        / Float (Textrender.Fonts.Units_Per_Em (R.State.Font));
+        / Float (Textrender.Fonts.Units_Per_Em (Selected));
 
       if G.Is_Empty then
          M.X := 0;
@@ -579,15 +597,15 @@ package body Textrender is
          M.Advance_X := Float (G.Advance_X) * Scale;
          M.Bearing_X := Float (G.Left_Side_Bearing) * Scale;
          M.Bearing_Y := 0.0;
-         Cache_Insert (Glyph_Index, (Status => Success, Metric => M));
+         Cache_Insert ((Status => Success, Metric => M));
          return Success;
       end if;
 
       declare
          Font_Ascent  : constant Integer :=
-           Textrender.Fonts.Ascent (R.State.Font);
+           Textrender.Fonts.Ascent (Selected);
          Font_Descent : constant Integer :=
-           Textrender.Fonts.Descent (R.State.Font);
+           Textrender.Fonts.Descent (Selected);
          Line_Top     : constant Integer :=
            Integer'Max (Font_Ascent, G.Bounds.Y_Max);
          Line_Bottom  : constant Integer :=
@@ -628,7 +646,7 @@ package body Textrender is
          Atlas_Y := Pack_Y + Glyph_Padding;
 
          if not Textrender.Rasterizer.Rasterize_Glyph
-           (F           => R.State.Font,
+           (F           => Selected,
             A           => R.State.Atlas,
             Glyph_Index => G.Glyph_Index,
             Atlas_X     => Atlas_X,
@@ -659,8 +677,7 @@ package body Textrender is
                   Advance_X => Float (G.Advance_X) * Scale,
                   Bearing_X => Float (G.Left_Side_Bearing) * Scale,
                   Bearing_Y => 0.0);
-            Cache_Insert
-              (Glyph_Index, (Status => Rasterize_Failed, Metric => M));
+            Cache_Insert ((Status => Rasterize_Failed, Metric => M));
             return Rasterize_Failed;
          end if;
 
@@ -690,7 +707,7 @@ package body Textrender is
       pragma Assert (M.U0 <= M.U1);
       pragma Assert (M.V0 <= M.V1);
 
-      Cache_Insert (Glyph_Index, (Status => Success, Metric => M));
+      Cache_Insert ((Status => Success, Metric => M));
       R.State.Atlas_Dirty_V := True;
 
       return Success;

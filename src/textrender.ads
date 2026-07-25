@@ -272,6 +272,7 @@ package Textrender is
      (R           : in out Renderer;
       Glyph_Index : Natural;
       M           : out Glyph_Metric;
+      Font_Index  : Natural := 0;
       Style       : Font_Style := Regular) return Status_Code;
 
    --  Compute glyph bitmap placement for a grid cell.
