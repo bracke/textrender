@@ -13,14 +13,14 @@ jobs:
       ALIRE_NONINTERACTIVE: "true"
     steps:
       - name: Check out textrender
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: textrender
 
       # tests/alire.toml pins project_tools at ../../project_tools, so it must
       # exist as a sibling checkout or the manifest will not load.
       - name: Check out project_tools sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/project_tools
           path: project_tools
@@ -29,7 +29,7 @@ jobs:
         # Pin the toolchain the manifests require. setup-alire@v5 defaults to alr
         # 2.1.0, whose index carries gnat_native 15.2.1; v4 pins alr 2.0.2, whose
         # older index cannot resolve it.
-        uses: alire-project/setup-alire@v5
+        uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
 
