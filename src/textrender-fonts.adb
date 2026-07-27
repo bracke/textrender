@@ -439,7 +439,31 @@ package body Textrender.Fonts is
          return False;
       end if;
 
-      for I in 0 .. Seg_Count - 1 loop
+      if Seg_Count = 0 then
+         return False;
+      end if;
+
+      declare
+         Lo : Integer := 0;
+         Hi : Integer := Seg_Count - 1;
+         I  : Natural;
+      begin
+         --  endCode[] is sorted ascending (the final segment ends at 0xFFFF), so
+         --  binary-search for the first segment whose endCode >= Code instead of
+         --  scanning every segment; then confirm Code is within its startCode.
+         while Lo < Hi loop
+            declare
+               Mid : constant Integer := Lo + (Hi - Lo) / 2;
+            begin
+               if U16 (F, End_Count_Off + Mid * 2) >= Code then
+                  Hi := Mid;
+               else
+                  Lo := Mid + 1;
+               end if;
+            end;
+         end loop;
+
+         I          := Natural (Lo);
          End_Code   := U16 (F, End_Count_Off + I * 2);
          Start_Code := U16 (F, Start_Count_Off + I * 2);
 
@@ -470,7 +494,7 @@ package body Textrender.Fonts is
             Glyph := G;
             return G /= 0;
          end if;
-      end loop;
+      end;
 
       return False;
    end Lookup_Cmap_Format_4;
@@ -538,8 +562,30 @@ package body Textrender.Fonts is
          return False;
       end if;
 
-      for I in 0 .. Groups - 1 loop
-         Group_Off  := Table + 16 + I * 12;
+      if Groups = 0 then
+         return False;
+      end if;
+
+      declare
+         Lo : Integer := 0;
+         Hi : Integer := Groups - 1;
+      begin
+         --  Groups are sorted by startCharCode (ascending, non-overlapping), so
+         --  endCharCode is ascending too: binary-search for the first group whose
+         --  endCharCode >= Code, then confirm Code is at or above its startCode.
+         while Lo < Hi loop
+            declare
+               Mid : constant Integer := Lo + (Hi - Lo) / 2;
+            begin
+               if U32 (F, Table + 16 + Mid * 12 + 4) >= Code then
+                  Hi := Mid;
+               else
+                  Lo := Mid + 1;
+               end if;
+            end;
+         end loop;
+
+         Group_Off  := Table + 16 + Natural (Lo) * 12;
          Start_Char := U32 (F, Group_Off);
          End_Char   := U32 (F, Group_Off + 4);
          Start_Gid  := U32 (F, Group_Off + 8);
@@ -548,7 +594,7 @@ package body Textrender.Fonts is
             Glyph := Start_Gid + (Code - Start_Char);
             return Glyph /= 0;
          end if;
-      end loop;
+      end;
 
       return False;
    end Lookup_Cmap_Format_12;

@@ -272,15 +272,10 @@ package body Textrender is
          end case;
       end Cache_Insert;
 
-      function Cache_Contains (Key : Codepoint) return Boolean is
+      function Cache_Find (Key : Codepoint) return Glyph_Caches.Cursor is
         (case Style is
-           when Regular => R.State.Cache.Contains (Key),
-           when Italic  => R.State.Italic_Cache.Contains (Key));
-
-      function Cache_Element (Key : Codepoint) return Cached_Glyph is
-        (case Style is
-           when Regular => R.State.Cache.Element (Key),
-           when Italic  => R.State.Italic_Cache.Element (Key));
+           when Regular => R.State.Cache.Find (Key),
+           when Italic  => R.State.Italic_Cache.Find (Key));
       G : Textrender.Fonts.Glyph_Info;
 
       Lookup_Result : Textrender.Fonts.Glyph_Lookup_Result;
@@ -308,14 +303,18 @@ package body Textrender is
          return Font_Not_Loaded;
       end if;
 
-      if Cache_Contains (C) then
-         declare
-            Cached : constant Cached_Glyph := Cache_Element (C);
-         begin
-            M := Cached.Metric;
-            return Cached.Status;
-         end;
-      end if;
+      declare
+         Cached_Cursor : constant Glyph_Caches.Cursor := Cache_Find (C);
+      begin
+         if Glyph_Caches.Has_Element (Cached_Cursor) then
+            declare
+               Cached : constant Cached_Glyph := Glyph_Caches.Element (Cached_Cursor);
+            begin
+               M := Cached.Metric;
+               return Cached.Status;
+            end;
+         end if;
+      end;
 
       --  Per-glyph font fallback: consult the primary font first, then each
       --  appended fallback in order, and resolve C to the first font that
@@ -532,15 +531,10 @@ package body Textrender is
          end case;
       end Cache_Insert;
 
-      function Cache_Contains return Boolean is
+      function Cache_Find return Glyph_Index_Caches.Cursor is
         (case Style is
-           when Regular => R.State.Glyph_Index_Cache.Contains (Key),
-           when Italic  => R.State.Italic_Glyph_Index_Cache.Contains (Key));
-
-      function Cache_Element return Cached_Glyph is
-        (case Style is
-           when Regular => R.State.Glyph_Index_Cache.Element (Key),
-           when Italic  => R.State.Italic_Glyph_Index_Cache.Element (Key));
+           when Regular => R.State.Glyph_Index_Cache.Find (Key),
+           when Italic  => R.State.Italic_Glyph_Index_Cache.Find (Key));
 
       Selected : Textrender.Fonts.Font;
       G       : Textrender.Fonts.Glyph_Info;
@@ -566,14 +560,18 @@ package body Textrender is
          return Glyph_Missing;
       end if;
 
-      if Cache_Contains then
-         declare
-            Cached : constant Cached_Glyph := Cache_Element;
-         begin
-            M := Cached.Metric;
-            return Cached.Status;
-         end;
-      end if;
+      declare
+         Cached_Cursor : constant Glyph_Index_Caches.Cursor := Cache_Find;
+      begin
+         if Glyph_Index_Caches.Has_Element (Cached_Cursor) then
+            declare
+               Cached : constant Cached_Glyph := Glyph_Index_Caches.Element (Cached_Cursor);
+            begin
+               M := Cached.Metric;
+               return Cached.Status;
+            end;
+         end if;
+      end;
 
       if Textrender.Fonts.Lookup_Glyph_By_Index
         (Selected, Glyph_Index, G) /= Textrender.Fonts.Glyph_Found
