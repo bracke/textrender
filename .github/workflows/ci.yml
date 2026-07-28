@@ -19,11 +19,10 @@ jobs:
 
       # tests/alire.toml pins project_tools at ../../project_tools, so it must
       # exist as a sibling checkout or the manifest will not load.
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v7
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
-          repository: ${{ github.repository_owner }}/project_tools
-          path: project_tools
+          root: textrender
 
       - name: Set up Alire
         # Pin the toolchain the manifests require. setup-alire@v5 defaults to alr
