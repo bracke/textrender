@@ -788,6 +788,16 @@ package body Textrender.Fonts is
       return Glyph_Found;
    end Lookup_Glyph_By_Index;
 
+   function Glyph_Index_Of
+     (F           : Font;
+      C           : Codepoint;
+      Glyph_Index : out Natural)
+      return Boolean is
+   begin
+      Glyph_Index := 0;
+      return F.Is_Loaded and then Lookup_Glyph_Index (F, C, Glyph_Index);
+   end Glyph_Index_Of;
+
    function Has_Colour_Bitmaps (F : Font) return Boolean is
    begin
       return (F.Cblc_Table.Found and then F.Cbdt_Table.Found)

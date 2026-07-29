@@ -327,6 +327,73 @@ package Textrender is
       First : Codepoint;
       Last  : Codepoint) return Status_Code;
 
+   --  Colour glyphs
+   --  -------------
+   --  Some fonts carry glyphs as pictures rather than outlines: the emoji fonts
+   --  do, and nothing else in a font file looks like that. Textrender reads where
+   --  those pictures are (see Textrender.Fonts.Colour_Bitmap_For) but does not
+   --  decode them -- they are PNG, decoding PNG needs an inflate implementation,
+   --  and several applications link this crate without wanting one.
+   --
+   --  So the caller supplies the decoder. Without one, colour glyphs are simply
+   --  unavailable and a codepoint falls back exactly as it does today.
+
+   --  Bytes of an encoded image, as they sit in the font file.
+   type Encoded_Image is array (Natural range <>) of Alpha;
+
+   --  Decoded pixels, four bytes per pixel in R, G, B, A order.
+   type Rgba_Buffer is array (Natural range <>) of Alpha;
+
+   --  How big is the image in these bytes? Answer False if it cannot be read;
+   --  this is asked before any buffer is allocated.
+   type Image_Extent_Reader is access function
+     (Data   : Encoded_Image;
+      Width  : out Natural;
+      Height : out Natural)
+      return Boolean;
+
+   --  Decode into Pixels, which is exactly Width * Height * 4 bytes as reported
+   --  by the reader above. Answer False to leave the glyph unavailable.
+   type Image_Decoder is access function
+     (Data   : Encoded_Image;
+      Width  : Natural;
+      Height : Natural;
+      Pixels : out Rgba_Buffer)
+      return Boolean;
+
+   --  Teach this renderer to decode the pictures inside fonts. Both are needed;
+   --  passing null for either turns colour glyphs off again.
+   procedure Set_Image_Decoder
+     (R      : in out Renderer;
+      Extent : Image_Extent_Reader;
+      Decode : Image_Decoder);
+
+   --  Is a colour glyph available for this codepoint -- a font in the chain has a
+   --  picture for it, and a decoder is installed to read it?
+   function Has_Colour_Glyph (R : Renderer; C : Codepoint) return Boolean;
+
+   --  Rasterize a colour glyph into the colour atlas and return where it landed.
+   --
+   --  The picture is scaled to the cell so it sits with the text: emoji strikes
+   --  are large (Noto's is 109 ppem with 136x128 bitmaps) so this is usually a
+   --  reduction of six times or more, and it averages the source pixels it
+   --  covers rather than sampling one of them. Dropping pixels at that ratio
+   --  turns a face into confetti.
+   function Get_Colour_Glyph
+     (R : in out Renderer;
+      C : Codepoint;
+      M : out Glyph_Metric)
+      return Status_Code;
+
+   --  The colour atlas: four bytes per pixel, R, G, B, A. Separate from the
+   --  alpha atlas because a coverage value and a picture are different things and
+   --  a backend binds them as different textures.
+   function Colour_Atlas_Width (R : Renderer) return Positive;
+   function Colour_Atlas_Height (R : Renderer) return Positive;
+   function Colour_Atlas_Pixels (R : Renderer) return access constant Rgba_Buffer;
+   function Colour_Atlas_Dirty (R : Renderer) return Boolean;
+   procedure Clear_Colour_Atlas_Dirty (R : in out Renderer);
+
 private
 
    Max_Composite_Depth : constant Natural := 4;

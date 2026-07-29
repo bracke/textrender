@@ -62,6 +62,21 @@ package Textrender.Fonts is
 
    function Num_Glyphs (F : Font) return Natural;
 
+   --  The glyph index this font's character map gives a codepoint, reading no
+   --  outline at all.
+   --
+   --  Lookup_Glyph cannot answer for a colour font: it reads the glyph's bounds
+   --  from glyf to fill in the metrics, and a bitmap-only font has no glyf, so
+   --  every codepoint came back Glyph_Not_Found however well the character map
+   --  mapped it. This is the character map on its own.
+   --
+   --  @return True when the font maps C, with Glyph_Index set.
+   function Glyph_Index_Of
+     (F           : Font;
+      C           : Codepoint;
+      Glyph_Index : out Natural)
+      return Boolean;
+
    --  A colour glyph as the font stores it: an encoded image, and where to put
    --  it. The image is NOT decoded here. Textrender rasterizes outlines; a
    --  colour glyph is a picture the font happens to carry, and decoding pictures

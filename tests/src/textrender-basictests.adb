@@ -1150,6 +1150,152 @@ package body Textrender.BasicTests is
       end if;
    end Test_Load_Ttc_Collection;
 
+   --  The colour glyph path, exercised without a PNG decoder in sight.
+   --
+   --  What this crate owns is the seam and what happens after it: find the
+   --  picture, ask the caller to decode it, average it down to the cell, pack it
+   --  into the colour atlas, report where it landed. Whether PNG is decoded
+   --  correctly is the caller's business, so the stub here returns a known
+   --  pattern and the assertions are about the parts textrender is responsible
+   --  for.
+   --
+   --  The pattern is deliberate: the left half opaque red, the right half opaque
+   --  blue. After averaging down, the left of the result must still be red-ish
+   --  and the right blue-ish. A downscale that sampled single pixels rather than
+   --  averaging would still pass that -- but one that mixed up rows and columns,
+   --  or wrote outside its rectangle, would not.
+   Stub_Source_Size : constant := 128;
+
+   function Stub_Extent
+     (Data   : Textrender.Encoded_Image;
+      Width  : out Natural;
+      Height : out Natural)
+      return Boolean
+   is
+      pragma Unreferenced (Data);
+   begin
+      Width := Stub_Source_Size;
+      Height := Stub_Source_Size;
+      return True;
+   end Stub_Extent;
+
+   function Stub_Decode
+     (Data   : Textrender.Encoded_Image;
+      Width  : Natural;
+      Height : Natural;
+      Pixels : out Textrender.Rgba_Buffer)
+      return Boolean
+   is
+      pragma Unreferenced (Data);
+   begin
+      Pixels := [others => 0];
+
+      for Row in 0 .. Height - 1 loop
+         for Col in 0 .. Width - 1 loop
+            declare
+               At_Px : constant Natural := (Row * Width + Col) * 4;
+            begin
+               if At_Px + 3 <= Pixels'Last then
+                  if Col < Width / 2 then
+                     Pixels (At_Px) := 255;      --  red
+                     Pixels (At_Px + 1) := 0;
+                     Pixels (At_Px + 2) := 0;
+                  else
+                     Pixels (At_Px) := 0;
+                     Pixels (At_Px + 1) := 0;
+                     Pixels (At_Px + 2) := 255;  --  blue
+                  end if;
+
+                  Pixels (At_Px + 3) := 255;
+               end if;
+            end;
+         end loop;
+      end loop;
+
+      return True;
+   end Stub_Decode;
+
+   procedure Test_Colour_Glyph_Pipeline (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Textrender.Status_Code;
+
+      Emoji_Path : constant String :=
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
+      R : Textrender.Renderer;
+      M : Textrender.Glyph_Metric;
+      Grinning : constant Textrender.Codepoint := 16#1F600#;
+   begin
+      if not Ada.Directories.Exists (Emoji_Path) then
+         return;
+      end if;
+
+      --  A text font first, then the emoji font as a fallback: the arrangement a
+      --  real application has.
+      Assert
+        (Textrender.Load_Font
+           (R, Path => Font_Path, Pixel_Size => 16,
+            Cell_Width => 8, Cell_Height => 20,
+            Atlas_Width => 512, Atlas_Height => 512) = Textrender.Success,
+         "the text font loads");
+      Assert
+        (Textrender.Add_Fallback_Font (R, Emoji_Path) = Textrender.Success,
+         "and a colour emoji font joins the fallback chain");
+
+      --  Without a decoder there are no colour glyphs, which is today's
+      --  behaviour and must stay available as an answer.
+      Assert
+        (not Textrender.Has_Colour_Glyph (R, Grinning),
+         "no decoder means no colour glyph");
+
+      Textrender.Set_Image_Decoder (R, Stub_Extent'Access, Stub_Decode'Access);
+      Assert
+        (Textrender.Has_Colour_Glyph (R, Grinning),
+         "with a decoder installed the emoji has a colour glyph");
+
+      Assert
+        (Textrender.Get_Colour_Glyph (R, Grinning, M) = Textrender.Success,
+         "and it rasterizes into the colour atlas");
+
+      --  Scaled to fit two cells, keeping its square aspect: 2x8 wide by 20 high
+      --  bounds a 128x128 source to 16x16.
+      Assert (M.W = 16 and then M.H = 16,
+              "the picture is fitted to the cell, got"
+              & Natural'Image (M.W) & " x" & Natural'Image (M.H));
+      Assert (M.W <= 16 and then M.H <= 20, "and stays inside two cells");
+      Assert (M.U1 > M.U0 and then M.V1 > M.V0, "with a non-empty atlas rectangle");
+      Assert (Textrender.Colour_Atlas_Dirty (R), "and marks the colour atlas dirty");
+
+      --  The averaged result: left half red, right half blue.
+      declare
+         Pixels : constant access constant Textrender.Rgba_Buffer :=
+           Textrender.Colour_Atlas_Pixels (R);
+         Stride : constant Natural := Textrender.Colour_Atlas_Width (R);
+
+         function At_Pixel (Col : Natural; Row : Natural; Channel : Natural) return Natural is
+           (Natural (Pixels (((M.Y + Row) * Stride + (M.X + Col)) * 4 + Channel)));
+      begin
+         Assert (Pixels /= null, "the colour atlas has pixels");
+         Assert (At_Pixel (1, M.H / 2, 0) > 200, "the left of the glyph is red");
+         Assert (At_Pixel (1, M.H / 2, 2) < 60, "and not blue");
+         Assert (At_Pixel (M.W - 2, M.H / 2, 2) > 200, "the right of the glyph is blue");
+         Assert (At_Pixel (M.W - 2, M.H / 2, 0) < 60, "and not red");
+         Assert (At_Pixel (1, M.H / 2, 3) > 200, "and it is opaque");
+      end;
+
+      --  Asked twice, packed once.
+      declare
+         Again : Textrender.Glyph_Metric;
+      begin
+         Assert
+           (Textrender.Get_Colour_Glyph (R, Grinning, Again) = Textrender.Success,
+            "a second request succeeds");
+         Assert (Again.X = M.X and then Again.Y = M.Y,
+                 "from the cache rather than a second atlas rectangle");
+      end;
+
+      Textrender.Reset (R);
+   end Test_Colour_Glyph_Pipeline;
+
    --  A bitmap-only colour font: no glyf, no loca, nothing to rasterize. Loading
    --  one used to be impossible -- Parse_Tables required outlines -- so the whole
    --  category of colour emoji fonts was unreachable.
@@ -1371,6 +1517,10 @@ package body Textrender.BasicTests is
         (T,
          Test_Colour_Bitmap_Font'Access,
          "Colour Bitmap Font");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Colour_Glyph_Pipeline'Access,
+         "Colour Glyph Pipeline");
 
    end Register_Tests;
 

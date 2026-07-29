@@ -56,6 +56,15 @@ package body Textrender is
      (Index_Type   => Positive,
       Element_Type => Textrender.Fonts.Font);
 
+   type Rgba_Buffer_Access is access all Rgba_Buffer;
+
+   --  Colour glyphs already in the colour atlas, by codepoint.
+   package Colour_Caches is new Ada.Containers.Hashed_Maps
+     (Key_Type        => Codepoint,
+      Element_Type    => Glyph_Metric,
+      Hash            => Codepoint_Hash,
+      Equivalent_Keys => "=");
+
    type Renderer_State is record
       Font          : Textrender.Fonts.Font;
       Fallbacks     : Font_Vectors.Vector;
@@ -68,6 +77,22 @@ package body Textrender is
       Cell_Width_V  : Positive := 1;
       Cell_Height_V : Positive := 1;
       Atlas_Dirty_V : Boolean := False;
+
+      --  Colour glyphs. A separate atlas from the alpha one because a coverage
+      --  value and a picture are different things, and a backend binds them as
+      --  different textures.
+      Colour_Pixels : Rgba_Buffer_Access := null;
+      Colour_Width  : Positive := 1;
+      Colour_Height : Positive := 1;
+      Colour_Next_X : Natural := 0;
+      Colour_Next_Y : Natural := 0;
+      Colour_Row_H  : Natural := 0;
+      Colour_Cache  : Colour_Caches.Map;
+      Colour_Dirty_V : Boolean := False;
+
+      --  The caller's decoder, or null for "colour glyphs unavailable".
+      Extent_Reader : Image_Extent_Reader := null;
+      Decoder       : Image_Decoder := null;
    end record;
 
    procedure Reset_Fallbacks (State : in out Renderer_State);
@@ -785,5 +810,331 @@ package body Textrender is
 
       return Success;
    end Preload;
+
+
+   procedure Set_Image_Decoder
+     (R      : in out Renderer;
+      Extent : Image_Extent_Reader;
+      Decode : Image_Decoder) is
+   begin
+      Ensure_State (R);
+      R.State.Extent_Reader := Extent;
+      R.State.Decoder := Decode;
+   end Set_Image_Decoder;
+
+   --  The font in the chain that has a colour picture for this codepoint, and the
+   --  glyph index within it. Searched in the same order as outlines: primary
+   --  first, then each fallback.
+   --  Which font matched: 0 for the primary, else the fallback's position.
+   procedure Find_Colour_Source
+     (R           : Renderer;
+      C           : Codepoint;
+      Found       : out Boolean;
+      Bitmap      : out Textrender.Fonts.Colour_Bitmap;
+      Source_Index : out Natural)
+   is
+      use type Textrender.Fonts.Colour_Image_Format;
+      use type Textrender.Fonts.Glyph_Lookup_Result;
+
+      procedure Try (F : Textrender.Fonts.Font; Which : Natural) is
+         Index : Natural := 0;
+      begin
+         if Found or else not Textrender.Fonts.Has_Colour_Bitmaps (F) then
+            return;
+         end if;
+
+         --  The character map alone: Lookup_Glyph reads bounds out of glyf to
+         --  fill its metrics, and a colour font has no glyf.
+         if not Textrender.Fonts.Glyph_Index_Of (F, C, Index) then
+            return;
+         end if;
+
+         declare
+            B : constant Textrender.Fonts.Colour_Bitmap :=
+              Textrender.Fonts.Colour_Bitmap_For (F, Index, R.State.Pixel_Size);
+         begin
+            if B.Format /= Textrender.Fonts.No_Colour_Image then
+               Found := True;
+               Bitmap := B;
+               Source_Index := Which;
+            end if;
+         end;
+      end Try;
+   begin
+      Found := False;
+      Bitmap := (Format => Textrender.Fonts.No_Colour_Image, others => <>);
+      Source_Index := 0;
+
+      if R.State = null then
+         return;
+      end if;
+
+      Try (R.State.Font, 0);
+
+      declare
+         Which : Natural := 0;
+      begin
+         for F of R.State.Fallbacks loop
+            exit when Found;
+            Which := Which + 1;
+            Try (F, Which);
+         end loop;
+      end;
+   end Find_Colour_Source;
+
+   function Has_Colour_Glyph (R : Renderer; C : Codepoint) return Boolean is
+      Found  : Boolean;
+      Bitmap : Textrender.Fonts.Colour_Bitmap;
+      Source : Natural;
+   begin
+      if R.State = null
+        or else R.State.Extent_Reader = null
+        or else R.State.Decoder = null
+      then
+         return False;
+      end if;
+
+      Find_Colour_Source (R, C, Found, Bitmap, Source);
+      return Found;
+   end Has_Colour_Glyph;
+
+   procedure Ensure_Colour_Atlas (R : in out Renderer) is
+   begin
+      if R.State.Colour_Pixels = null then
+         --  Emoji are few and large: a 512-square atlas holds several hundred at
+         --  text size, and costs a megabyte only if colour glyphs are used at all.
+         R.State.Colour_Width := 512;
+         R.State.Colour_Height := 512;
+         R.State.Colour_Pixels :=
+           new Rgba_Buffer (0 .. R.State.Colour_Width * R.State.Colour_Height * 4 - 1);
+         R.State.Colour_Pixels.all := [others => 0];
+         R.State.Colour_Next_X := 0;
+         R.State.Colour_Next_Y := 0;
+         R.State.Colour_Row_H := 0;
+      end if;
+   end Ensure_Colour_Atlas;
+
+   --  Shelf packing, the same discipline the alpha atlas uses.
+   function Allocate_Colour_Rect
+     (R : in out Renderer;
+      W : Positive;
+      H : Positive;
+      X : out Natural;
+      Y : out Natural)
+      return Boolean is
+   begin
+      X := 0;
+      Y := 0;
+
+      if W > R.State.Colour_Width or else H > R.State.Colour_Height then
+         return False;
+      end if;
+
+      if R.State.Colour_Next_X + W > R.State.Colour_Width then
+         R.State.Colour_Next_X := 0;
+         R.State.Colour_Next_Y := R.State.Colour_Next_Y + R.State.Colour_Row_H;
+         R.State.Colour_Row_H := 0;
+      end if;
+
+      if R.State.Colour_Next_Y + H > R.State.Colour_Height then
+         return False;
+      end if;
+
+      X := R.State.Colour_Next_X;
+      Y := R.State.Colour_Next_Y;
+      R.State.Colour_Next_X := R.State.Colour_Next_X + W;
+
+      if H > R.State.Colour_Row_H then
+         R.State.Colour_Row_H := H;
+      end if;
+
+      return True;
+   end Allocate_Colour_Rect;
+
+   function Get_Colour_Glyph
+     (R : in out Renderer;
+      C : Codepoint;
+      M : out Glyph_Metric)
+      return Status_Code
+   is
+      Found  : Boolean;
+      Bitmap : Textrender.Fonts.Colour_Bitmap;
+      Source : Natural;
+   begin
+      M := (X => 0, Y => 0, W => 0, H => 0,
+            U0 => 0.0, V0 => 0.0, U1 => 0.0, V1 => 0.0,
+            Advance_X => 0.0, Bearing_X => 0.0, Bearing_Y => 0.0);
+
+      if R.State = null or else not R.State.Font.Loaded then
+         return Font_Not_Loaded;
+      end if;
+
+      if R.State.Extent_Reader = null or else R.State.Decoder = null then
+         return Glyph_Missing;
+      end if;
+
+      if R.State.Colour_Cache.Contains (C) then
+         M := R.State.Colour_Cache.Element (C);
+         return Success;
+      end if;
+
+      Find_Colour_Source (R, C, Found, Bitmap, Source);
+
+      if not Found then
+         return Glyph_Missing;
+      end if;
+
+      declare
+         --  The picture, as the font stores it.
+         Data : Encoded_Image (0 .. Bitmap.Data_Length - 1);
+         Src_W : Natural := 0;
+         Src_H : Natural := 0;
+      begin
+         for I in Data'Range loop
+            Data (I) :=
+              Alpha (Textrender.Fonts.Byte_At
+                       ((if Source = 0
+                         then R.State.Font
+                         else R.State.Fallbacks (Source)),
+                        Bitmap.Data_Offset + I));
+         end loop;
+
+         if not R.State.Extent_Reader (Data, Src_W, Src_H)
+           or else Src_W = 0 or else Src_H = 0
+         then
+            return Glyph_Missing;
+         end if;
+
+         declare
+            Src : Rgba_Buffer (0 .. Src_W * Src_H * 4 - 1) := [others => 0];
+         begin
+            if not R.State.Decoder (Data, Src_W, Src_H, Src) then
+               return Glyph_Missing;
+            end if;
+
+            --  Fit the picture into two cells by its own aspect ratio: emoji are
+            --  square and occupy two cells of a monospaced grid.
+            declare
+               Box_W : constant Positive := Positive'Max (1, R.State.Cell_Width_V * 2);
+               Box_H : constant Positive := Positive'Max (1, R.State.Cell_Height_V);
+               Scale : constant Float :=
+                 Float'Min (Float (Box_W) / Float (Src_W), Float (Box_H) / Float (Src_H));
+               Dst_W : constant Positive :=
+                 Positive'Max (1, Natural (Float'Floor (Float (Src_W) * Scale)));
+               Dst_H : constant Positive :=
+                 Positive'Max (1, Natural (Float'Floor (Float (Src_H) * Scale)));
+               At_X, At_Y : Natural;
+            begin
+               Ensure_Colour_Atlas (R);
+
+               if not Allocate_Colour_Rect (R, Dst_W, Dst_H, At_X, At_Y) then
+                  return Atlas_Full;
+               end if;
+
+               --  Average every source pixel the destination pixel covers. This
+               --  is a reduction of six times or more from an emoji strike, and
+               --  picking one source pixel out of forty would turn a face into
+               --  confetti.
+               for Row in 0 .. Dst_H - 1 loop
+                  for Col in 0 .. Dst_W - 1 loop
+                     declare
+                        Y0 : constant Natural := Row * Src_H / Dst_H;
+                        Y1 : constant Natural :=
+                          Natural'Max (Y0 + 1, (Row + 1) * Src_H / Dst_H);
+                        X0 : constant Natural := Col * Src_W / Dst_W;
+                        X1 : constant Natural :=
+                          Natural'Max (X0 + 1, (Col + 1) * Src_W / Dst_W);
+
+                        Sum_R, Sum_G, Sum_B, Sum_A : Natural := 0;
+                        Count : Natural := 0;
+                     begin
+                        for Sy in Y0 .. Y1 - 1 loop
+                           for Sx in X0 .. X1 - 1 loop
+                              declare
+                                 At_Src : constant Natural := (Sy * Src_W + Sx) * 4;
+                              begin
+                                 exit when At_Src + 3 > Src'Last;
+                                 Sum_R := Sum_R + Natural (Src (At_Src));
+                                 Sum_G := Sum_G + Natural (Src (At_Src + 1));
+                                 Sum_B := Sum_B + Natural (Src (At_Src + 2));
+                                 Sum_A := Sum_A + Natural (Src (At_Src + 3));
+                                 Count := Count + 1;
+                              end;
+                           end loop;
+                        end loop;
+
+                        if Count > 0 then
+                           declare
+                              At_Dst : constant Natural :=
+                                ((At_Y + Row) * R.State.Colour_Width + (At_X + Col)) * 4;
+                           begin
+                              if At_Dst + 3 <= R.State.Colour_Pixels'Last then
+                                 R.State.Colour_Pixels (At_Dst) := Alpha (Sum_R / Count);
+                                 R.State.Colour_Pixels (At_Dst + 1) := Alpha (Sum_G / Count);
+                                 R.State.Colour_Pixels (At_Dst + 2) := Alpha (Sum_B / Count);
+                                 R.State.Colour_Pixels (At_Dst + 3) := Alpha (Sum_A / Count);
+                              end if;
+                           end;
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+
+               R.State.Colour_Dirty_V := True;
+
+               M :=
+                 (X => At_X, Y => At_Y, W => Dst_W, H => Dst_H,
+                  U0 => Float (At_X) / Float (R.State.Colour_Width),
+                  V0 => Float (At_Y) / Float (R.State.Colour_Height),
+                  U1 => Float (At_X + Dst_W) / Float (R.State.Colour_Width),
+                  V1 => Float (At_Y + Dst_H) / Float (R.State.Colour_Height),
+                  Advance_X => Float (Box_W),
+                  Bearing_X => 0.0,
+                  --  Sit the picture inside the line rather than on the baseline:
+                  --  an emoji has no baseline of its own, and centring it in the
+                  --  cell is what puts it level with the text beside it.
+                  Bearing_Y =>
+                    Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2));
+
+               R.State.Colour_Cache.Insert (C, M);
+               return Success;
+            end;
+         end;
+      end;
+   exception
+      when others =>
+         return Glyph_Missing;
+   end Get_Colour_Glyph;
+
+   function Colour_Atlas_Width (R : Renderer) return Positive is
+   begin
+      return (if R.State = null then 1 else R.State.Colour_Width);
+   end Colour_Atlas_Width;
+
+   function Colour_Atlas_Height (R : Renderer) return Positive is
+   begin
+      return (if R.State = null then 1 else R.State.Colour_Height);
+   end Colour_Atlas_Height;
+
+   function Colour_Atlas_Pixels (R : Renderer) return access constant Rgba_Buffer is
+   begin
+      if R.State = null then
+         return null;
+      end if;
+
+      return R.State.Colour_Pixels;
+   end Colour_Atlas_Pixels;
+
+   function Colour_Atlas_Dirty (R : Renderer) return Boolean is
+   begin
+      return R.State /= null and then R.State.Colour_Dirty_V;
+   end Colour_Atlas_Dirty;
+
+   procedure Clear_Colour_Atlas_Dirty (R : in out Renderer) is
+   begin
+      if R.State /= null then
+         R.State.Colour_Dirty_V := False;
+      end if;
+   end Clear_Colour_Atlas_Dirty;
 
 end Textrender;
