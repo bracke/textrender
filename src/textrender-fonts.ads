@@ -62,6 +62,60 @@ package Textrender.Fonts is
 
    function Num_Glyphs (F : Font) return Natural;
 
+   --  A colour glyph as the font stores it: an encoded image, and where to put
+   --  it. The image is NOT decoded here. Textrender rasterizes outlines; a
+   --  colour glyph is a picture the font happens to carry, and decoding pictures
+   --  is a different job with a different dependency -- so the bytes and the
+   --  metrics come out and the caller supplies the decoder.
+   --
+   --  Both formats this reads store PNG: CBDT (Google, Noto Color Emoji) and
+   --  sbix (Apple Color Emoji). COLR/CPAL is not one of them -- that is layered
+   --  outlines rather than an image, and would go through the rasterizer.
+   type Colour_Image_Format is (No_Colour_Image, Png_Colour_Image);
+
+   type Colour_Bitmap is record
+      Format : Colour_Image_Format := No_Colour_Image;
+
+      --  Where the encoded image sits in the font's own bytes.
+      Data_Offset : Natural := 0;
+      Data_Length : Natural := 0;
+
+      --  The strike this came from, and the image's size in its pixels. Emoji
+      --  strikes are large -- Noto's is 109 ppem with 136x128 bitmaps -- so a
+      --  caller drawing at text size is downscaling substantially and should
+      --  filter rather than drop pixels.
+      Ppem   : Positive := 1;
+      Width  : Natural := 0;
+      Height : Natural := 0;
+
+      --  Placement in the strike's pixels, as the font gives it: bearing from
+      --  the pen position, and how far the pen then moves.
+      Bearing_X : Integer := 0;
+      Bearing_Y : Integer := 0;
+      Advance   : Natural := 0;
+   end record;
+
+   --  Does this font carry colour bitmaps at all?
+   function Has_Colour_Bitmaps (F : Font) return Boolean;
+
+   --  Has this font got no outlines -- only colour bitmaps?
+   --
+   --  Noto Color Emoji is exactly this: no glyf, no loca, nothing to rasterize.
+   --  Such a font loads, and every outline query answers empty rather than
+   --  raising, so a caller can hold it in a fallback chain and ask it only for
+   --  the codepoints it actually has.
+   function Is_Bitmap_Only (F : Font) return Boolean;
+
+   --  The colour glyph for this glyph index, at the strike best matching
+   --  Pixel_Size: the smallest strike at least that big, or the largest strike
+   --  when every one of them is smaller. Format is No_Colour_Image when this
+   --  glyph has no bitmap -- which is normal, since strike coverage is sparse.
+   function Colour_Bitmap_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Pixel_Size  : Positive)
+      return Colour_Bitmap;
+
    function Glyph_Data_Range
      (F           : Font;
       Glyph_Index : Natural;
@@ -113,6 +167,13 @@ private
       Cmap_Table : Table_Info;
       Loca_Table : Table_Info;
       Glyf_Table : Table_Info;
+
+      --  Colour bitmap strikes. CBLC indexes them and CBDT holds the images;
+      --  sbix carries both in one table. A font may have neither, either, or --
+      --  in the case of the emoji fonts -- these and no outlines at all.
+      Cblc_Table : Table_Info;
+      Cbdt_Table : Table_Info;
+      Sbix_Table : Table_Info;
 
       Units_Per_Em_V        : Positive := 1;
       Index_To_Loc_Format_V : Integer := 0;

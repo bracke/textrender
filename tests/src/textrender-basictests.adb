@@ -1150,6 +1150,79 @@ package body Textrender.BasicTests is
       end if;
    end Test_Load_Ttc_Collection;
 
+   --  A bitmap-only colour font: no glyf, no loca, nothing to rasterize. Loading
+   --  one used to be impossible -- Parse_Tables required outlines -- so the whole
+   --  category of colour emoji fonts was unreachable.
+   --
+   --  The numbers asserted here were read out of Noto Color Emoji's own bytes
+   --  before any of this was written: one strike at 109 ppem, index format 1 with
+   --  image format 17 throughout, glyph bitmaps 136x128 with bearing 0,101, and
+   --  every image a PNG. Skipped where the font is not installed, so this does
+   --  not turn a missing font into a failure.
+   procedure Test_Colour_Bitmap_Font (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      use type Textrender.Fonts.Load_Result;
+      use type Textrender.Fonts.Colour_Image_Format;
+      Emoji_Path : constant String :=
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
+      F : Textrender.Fonts.Font;
+   begin
+      if not Ada.Directories.Exists (Emoji_Path) then
+         return;
+      end if;
+
+      Assert
+        (Textrender.Fonts.Load (F, Emoji_Path) = Textrender.Fonts.Loaded,
+         "a colour font with no outlines loads");
+      Assert
+        (Textrender.Fonts.Has_Colour_Bitmaps (F),
+         "and reports that it carries colour bitmaps");
+      Assert
+        (Textrender.Fonts.Is_Bitmap_Only (F),
+         "and that it has no outlines at all");
+
+      --  A glyph the strike covers. Glyph 19 sits inside the second index
+      --  subtable, well away from the range edges.
+      declare
+         B : constant Textrender.Fonts.Colour_Bitmap :=
+           Textrender.Fonts.Colour_Bitmap_For (F, 19, 16);
+      begin
+         Assert
+           (B.Format = Textrender.Fonts.Png_Colour_Image,
+            "a covered glyph yields a PNG image");
+         Assert (B.Width = 136 and then B.Height = 128,
+                 "with the strike's bitmap size");
+         Assert (B.Bearing_X = 0 and then B.Bearing_Y = 101,
+                 "and the placement the font records");
+         Assert (B.Ppem = 109, "from the font's single 109 ppem strike");
+         Assert (B.Data_Length > 0, "and a non-empty image");
+      end;
+
+      --  Glyph 18 falls in the gap between subtables: coverage is sparse, and a
+      --  glyph without a bitmap must say so rather than return stray bytes.
+      declare
+         B : constant Textrender.Fonts.Colour_Bitmap :=
+           Textrender.Fonts.Colour_Bitmap_For (F, 18, 16);
+      begin
+         Assert
+           (B.Format = Textrender.Fonts.No_Colour_Image,
+            "a glyph in a gap between strike subtables has no bitmap");
+      end;
+
+      --  Far past the last covered glyph, and past numGlyphs entirely.
+      declare
+         B : constant Textrender.Fonts.Colour_Bitmap :=
+           Textrender.Fonts.Colour_Bitmap_For (F, 99_999, 16);
+      begin
+         Assert
+           (B.Format = Textrender.Fonts.No_Colour_Image,
+            "a glyph index beyond the font is refused rather than read");
+      end;
+
+      Textrender.Fonts.Reset (F);
+   end Test_Colour_Bitmap_Font;
+
    overriding
    procedure Register_Tests
      (T : in out Textrender_Basic_Case)
@@ -1294,6 +1367,10 @@ package body Textrender.BasicTests is
         (T,
          Test_ASCII_Range_Cached_Does_Not_Rewrite_Atlas'Access,
          "ASCII Range Cached Does Not Rewrite Atlas");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Colour_Bitmap_Font'Access,
+         "Colour Bitmap Font");
 
    end Register_Tests;
 

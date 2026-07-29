@@ -788,6 +788,320 @@ package body Textrender.Fonts is
       return Glyph_Found;
    end Lookup_Glyph_By_Index;
 
+   function Has_Colour_Bitmaps (F : Font) return Boolean is
+   begin
+      return (F.Cblc_Table.Found and then F.Cbdt_Table.Found)
+        or else F.Sbix_Table.Found;
+   end Has_Colour_Bitmaps;
+
+   function Is_Bitmap_Only (F : Font) return Boolean is
+   begin
+      return Has_Colour_Bitmaps (F)
+        and then not (F.Loca_Table.Found and then F.Glyf_Table.Found);
+   end Is_Bitmap_Only;
+
+   --  A signed byte read as Ada sees it: CBDT's small metrics store bearings as
+   --  int8, and reading them unsigned puts a glyph 256 pixels the wrong way.
+   function I8 (F : Font; Offset : Natural) return Integer is
+      Raw : constant Natural := Natural (Byte_At (F, Offset));
+   begin
+      return (if Raw >= 128 then Raw - 256 else Raw);
+   end I8;
+
+   --  CBLC: pick a strike, find the index subtable covering the glyph, and read
+   --  the image's position out of CBDT.
+   --
+   --  Only what real fonts use is implemented, deliberately: index formats 1 and
+   --  3 (a 32- or 16-bit offset array) and image formats 17, 18 and 19 (small
+   --  metrics, big metrics, or metrics inherited from the strike). Noto Color
+   --  Emoji is index format 1 with image format 17 throughout. Anything else
+   --  answers "no bitmap" rather than guessing at bytes.
+   function Cbdt_Bitmap_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Pixel_Size  : Positive)
+      return Colour_Bitmap
+   is
+      Result     : Colour_Bitmap;
+      Cblc       : constant Natural := F.Cblc_Table.Offset;
+      Num_Sizes  : Natural;
+      Best_Strike : Natural := 0;
+      Best_Ppem   : Natural := 0;
+      Found_Strike : Boolean := False;
+   begin
+      if not Has_Bytes (F, Cblc, 8) then
+         return Result;
+      end if;
+
+      Num_Sizes := U32 (F, Cblc + 4);
+
+      --  Choose the smallest strike that is at least the requested size, and the
+      --  largest available when they are all smaller: downscaling a bitmap keeps
+      --  more of it than magnifying one.
+      for Strike in 0 .. Num_Sizes - 1 loop
+         declare
+            Base : constant Natural := Cblc + 8 + Strike * 48;
+         begin
+            exit when not Has_Bytes (F, Base, 48);
+
+            declare
+               Ppem : constant Natural := Natural (Byte_At (F, Base + 44));
+            begin
+               if Ppem > 0 then
+                  if not Found_Strike then
+                     Best_Strike := Strike;
+                     Best_Ppem := Ppem;
+                     Found_Strike := True;
+                  elsif Best_Ppem < Pixel_Size then
+                     --  Everything so far is too small; anything larger is better.
+                     if Ppem > Best_Ppem then
+                        Best_Strike := Strike;
+                        Best_Ppem := Ppem;
+                     end if;
+                  elsif Ppem >= Pixel_Size and then Ppem < Best_Ppem then
+                     Best_Strike := Strike;
+                     Best_Ppem := Ppem;
+                  end if;
+               end if;
+            end;
+         end;
+      end loop;
+
+      if not Found_Strike then
+         return Result;
+      end if;
+
+      declare
+         Base       : constant Natural := Cblc + 8 + Best_Strike * 48;
+         Array_Off  : constant Natural := U32 (F, Base);
+         Num_Tables : constant Natural := U32 (F, Base + 8);
+      begin
+         for Entry_Index in 0 .. Num_Tables - 1 loop
+            declare
+               Rec : constant Natural := Cblc + Array_Off + Entry_Index * 8;
+            begin
+               exit when not Has_Bytes (F, Rec, 8);
+
+               declare
+                  First_Glyph : constant Natural := U16 (F, Rec);
+                  Last_Glyph  : constant Natural := U16 (F, Rec + 2);
+                  Sub_Off     : constant Natural := U32 (F, Rec + 4);
+               begin
+                  --  Strike coverage is sparse: real fonts leave gaps between
+                  --  subtables, so a glyph in a gap simply has no bitmap.
+                  if Glyph_Index >= First_Glyph and then Glyph_Index <= Last_Glyph then
+                     declare
+                        Header       : constant Natural := Cblc + Array_Off + Sub_Off;
+                        Index_Format : Natural;
+                        Image_Format : Natural;
+                        Data_Base    : Natural;
+                        Slot         : constant Natural := Glyph_Index - First_Glyph;
+                        Start_Off    : Natural := 0;
+                        End_Off      : Natural := 0;
+                     begin
+                        exit when not Has_Bytes (F, Header, 8);
+
+                        Index_Format := U16 (F, Header);
+                        Image_Format := U16 (F, Header + 2);
+                        Data_Base    := F.Cbdt_Table.Offset + U32 (F, Header + 4);
+
+                        if Index_Format = 1 then
+                           exit when not Has_Bytes (F, Header + 8 + Slot * 4, 8);
+                           Start_Off := U32 (F, Header + 8 + Slot * 4);
+                           End_Off   := U32 (F, Header + 8 + (Slot + 1) * 4);
+                        elsif Index_Format = 3 then
+                           exit when not Has_Bytes (F, Header + 8 + Slot * 2, 4);
+                           Start_Off := U16 (F, Header + 8 + Slot * 2);
+                           End_Off   := U16 (F, Header + 8 + (Slot + 1) * 2);
+                        else
+                           exit;
+                        end if;
+
+                        if End_Off <= Start_Off then
+                           --  An empty slot: this glyph is in range but has no image.
+                           exit;
+                        end if;
+
+                        declare
+                           Glyph_Data : constant Natural := Data_Base + Start_Off;
+                        begin
+                           if Image_Format = 17 then
+                              exit when not Has_Bytes (F, Glyph_Data, 9);
+                              Result.Height    := Natural (Byte_At (F, Glyph_Data));
+                              Result.Width     := Natural (Byte_At (F, Glyph_Data + 1));
+                              Result.Bearing_X := I8 (F, Glyph_Data + 2);
+                              Result.Bearing_Y := I8 (F, Glyph_Data + 3);
+                              Result.Advance   := Natural (Byte_At (F, Glyph_Data + 4));
+                              Result.Data_Length := U32 (F, Glyph_Data + 5);
+                              Result.Data_Offset := Glyph_Data + 9;
+                           elsif Image_Format = 18 then
+                              exit when not Has_Bytes (F, Glyph_Data, 12);
+                              Result.Height    := Natural (Byte_At (F, Glyph_Data));
+                              Result.Width     := Natural (Byte_At (F, Glyph_Data + 1));
+                              Result.Bearing_X := I8 (F, Glyph_Data + 2);
+                              Result.Bearing_Y := I8 (F, Glyph_Data + 3);
+                              Result.Advance   := Natural (Byte_At (F, Glyph_Data + 4));
+                              Result.Data_Length := U32 (F, Glyph_Data + 8);
+                              Result.Data_Offset := Glyph_Data + 12;
+                           elsif Image_Format = 19 then
+                              Result.Data_Length := End_Off - Start_Off;
+                              Result.Data_Offset := Glyph_Data;
+                           else
+                              exit;
+                           end if;
+
+                           if Result.Data_Length > 0
+                             and then Has_Bytes (F, Result.Data_Offset, Result.Data_Length)
+                           then
+                              Result.Format := Png_Colour_Image;
+                              Result.Ppem := Positive'Max (1, Best_Ppem);
+                           else
+                              Result.Format := No_Colour_Image;
+                           end if;
+                        end;
+
+                        exit;
+                     end;
+                  end if;
+               end;
+            end;
+         end loop;
+      end;
+
+      return Result;
+   end Cbdt_Bitmap_For;
+
+   --  sbix: strikes of per-glyph images, each prefixed by its origin offset and
+   --  a four-character type tag. Only "png " is read; Apple also allows "jpg "
+   --  and "tiff", which no emoji font uses.
+   function Sbix_Bitmap_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Pixel_Size  : Positive)
+      return Colour_Bitmap
+   is
+      Result      : Colour_Bitmap;
+      Sbix        : constant Natural := F.Sbix_Table.Offset;
+      Num_Strikes : Natural;
+      Best_Offset : Natural := 0;
+      Best_Ppem   : Natural := 0;
+      Found       : Boolean := False;
+   begin
+      if not Has_Bytes (F, Sbix, 8) then
+         return Result;
+      end if;
+
+      Num_Strikes := U32 (F, Sbix + 4);
+
+      for Strike in 0 .. Num_Strikes - 1 loop
+         exit when not Has_Bytes (F, Sbix + 8 + Strike * 4, 4);
+
+         declare
+            Strike_Off : constant Natural := Sbix + U32 (F, Sbix + 8 + Strike * 4);
+         begin
+            exit when not Has_Bytes (F, Strike_Off, 4);
+
+            declare
+               Ppem : constant Natural := U16 (F, Strike_Off);
+            begin
+               if Ppem > 0 then
+                  if not Found then
+                     Best_Offset := Strike_Off;
+                     Best_Ppem := Ppem;
+                     Found := True;
+                  elsif Best_Ppem < Pixel_Size then
+                     if Ppem > Best_Ppem then
+                        Best_Offset := Strike_Off;
+                        Best_Ppem := Ppem;
+                     end if;
+                  elsif Ppem >= Pixel_Size and then Ppem < Best_Ppem then
+                     Best_Offset := Strike_Off;
+                     Best_Ppem := Ppem;
+                  end if;
+               end if;
+            end;
+         end;
+      end loop;
+
+      if not Found then
+         return Result;
+      end if;
+
+      declare
+         --  glyphDataOffsets is numGlyphs + 1 entries after the 4-byte header.
+         Offsets : constant Natural := Best_Offset + 4;
+         Start_Off : Natural;
+         End_Off   : Natural;
+      begin
+         if not Has_Bytes (F, Offsets + Glyph_Index * 4, 8) then
+            return Result;
+         end if;
+
+         Start_Off := U32 (F, Offsets + Glyph_Index * 4);
+         End_Off   := U32 (F, Offsets + (Glyph_Index + 1) * 4);
+
+         --  Equal offsets mean this glyph has no image in this strike.
+         if End_Off <= Start_Off or else End_Off - Start_Off <= 8 then
+            return Result;
+         end if;
+
+         declare
+            Record_Off : constant Natural := Best_Offset + Start_Off;
+         begin
+            if not Has_Bytes (F, Record_Off, 8) then
+               return Result;
+            end if;
+
+            --  graphicType is the 4 bytes after the two origin offsets.
+            if Byte_At (F, Record_Off + 4) /= Character'Pos ('p')
+              or else Byte_At (F, Record_Off + 5) /= Character'Pos ('n')
+              or else Byte_At (F, Record_Off + 6) /= Character'Pos ('g')
+              or else Byte_At (F, Record_Off + 7) /= Character'Pos (' ')
+            then
+               return Result;
+            end if;
+
+            Result.Bearing_X := I16 (F, Record_Off);
+            Result.Bearing_Y := I16 (F, Record_Off + 2);
+            Result.Data_Offset := Record_Off + 8;
+            Result.Data_Length := (End_Off - Start_Off) - 8;
+
+            if Has_Bytes (F, Result.Data_Offset, Result.Data_Length) then
+               Result.Format := Png_Colour_Image;
+               Result.Ppem := Positive'Max (1, Best_Ppem);
+            end if;
+         end;
+      end;
+
+      return Result;
+   end Sbix_Bitmap_For;
+
+   function Colour_Bitmap_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Pixel_Size  : Positive)
+      return Colour_Bitmap
+   is
+      Result : Colour_Bitmap;
+   begin
+      if F.Cblc_Table.Found and then F.Cbdt_Table.Found then
+         Result := Cbdt_Bitmap_For (F, Glyph_Index, Pixel_Size);
+
+         if Result.Format /= No_Colour_Image then
+            return Result;
+         end if;
+      end if;
+
+      if F.Sbix_Table.Found then
+         return Sbix_Bitmap_For (F, Glyph_Index, Pixel_Size);
+      end if;
+
+      return Result;
+   exception
+      when others =>
+         return (Format => No_Colour_Image, others => <>);
+   end Colour_Bitmap_For;
+
    function Parse_Tables (F : in out Font) return Boolean is
       --  Find_Table writes its out parameter before it reads F, so passing a
       --  component of F directly made the actual overlap the writable formal
@@ -820,15 +1134,38 @@ package body Textrender.Fonts is
       end if;
       F.Cmap_Table := Info;
 
-      if not Find_Table (F, 'l', 'o', 'c', 'a', Info) then
-         return False;
+      --  Colour bitmap strikes, all optional.
+      if Find_Table (F, 'C', 'B', 'L', 'C', Info) then
+         F.Cblc_Table := Info;
       end if;
-      F.Loca_Table := Info;
 
-      if not Find_Table (F, 'g', 'l', 'y', 'f', Info) then
+      if Find_Table (F, 'C', 'B', 'D', 'T', Info) then
+         F.Cbdt_Table := Info;
+      end if;
+
+      if Find_Table (F, 's', 'b', 'i', 'x', Info) then
+         F.Sbix_Table := Info;
+      end if;
+
+      --  Outlines are optional when the font carries colour bitmaps instead.
+      --  This used to refuse any font without glyf and loca, which is every
+      --  colour emoji font: Noto Color Emoji has neither table, so it could not
+      --  be loaded at all, let alone held in a fallback chain. A bitmap-only
+      --  font now loads and answers every outline query as empty.
+      if Find_Table (F, 'l', 'o', 'c', 'a', Info) then
+         F.Loca_Table := Info;
+      end if;
+
+      if Find_Table (F, 'g', 'l', 'y', 'f', Info) then
+         F.Glyf_Table := Info;
+      end if;
+
+      if not (F.Loca_Table.Found and then F.Glyf_Table.Found)
+        and then not Has_Colour_Bitmaps (F)
+      then
+         --  Nothing to draw with: no outlines and no bitmaps either.
          return False;
       end if;
-      F.Glyf_Table := Info;
 
       if F.Head_Table.Length < 54
         or else F.Hhea_Table.Length < 36
