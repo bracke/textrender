@@ -58,10 +58,16 @@ package body Textrender is
 
    type Rgba_Buffer_Access is access all Rgba_Buffer;
 
-   --  Colour glyphs already in the colour atlas, by codepoint.
+   --  A colour glyph that has been decoded and scaled, held as its own tile.
+   type Colour_Tile is record
+      Glyph  : Colour_Glyph;
+      Pixels : Rgba_Buffer_Access := null;
+   end record;
+
+   --  Colour glyphs already decoded, by codepoint.
    package Colour_Caches is new Ada.Containers.Hashed_Maps
      (Key_Type        => Codepoint,
-      Element_Type    => Glyph_Metric,
+      Element_Type    => Colour_Tile,
       Hash            => Codepoint_Hash,
       Equivalent_Keys => "=");
 
@@ -78,17 +84,10 @@ package body Textrender is
       Cell_Height_V : Positive := 1;
       Atlas_Dirty_V : Boolean := False;
 
-      --  Colour glyphs. A separate atlas from the alpha one because a coverage
-      --  value and a picture are different things, and a backend binds them as
-      --  different textures.
-      Colour_Pixels : Rgba_Buffer_Access := null;
-      Colour_Width  : Positive := 1;
-      Colour_Height : Positive := 1;
-      Colour_Next_X : Natural := 0;
-      Colour_Next_Y : Natural := 0;
-      Colour_Row_H  : Natural := 0;
-      Colour_Cache  : Colour_Caches.Map;
-      Colour_Dirty_V : Boolean := False;
+      --  Colour glyphs, one decoded tile each. Not packed into an atlas here:
+      --  a picture is not a coverage mask, and whoever draws pictures already
+      --  has a sheet to put one on.
+      Colour_Cache : Colour_Caches.Map;
 
       --  The caller's decoder, or null for "colour glyphs unavailable".
       Extent_Reader : Image_Extent_Reader := null;
@@ -105,6 +104,23 @@ package body Textrender is
 
       State.Fallbacks.Clear;
    end Reset_Fallbacks;
+
+   procedure Free_Rgba is new Ada.Unchecked_Deallocation
+     (Rgba_Buffer, Rgba_Buffer_Access);
+
+   --  Colour tiles are one allocation per glyph, so they have to be handed back.
+   --  Clearing the map alone would leak them, and dropping the map without
+   --  clearing it would hand out pictures decoded from a font that is gone.
+   procedure Free_Colour_Cache (State : in out Renderer_State);
+
+   procedure Free_Colour_Cache (State : in out Renderer_State) is
+   begin
+      for Tile of State.Colour_Cache loop
+         Free_Rgba (Tile.Pixels);
+      end loop;
+
+      State.Colour_Cache.Clear;
+   end Free_Colour_Cache;
 
    procedure Free_State is new Ada.Unchecked_Deallocation
      (Renderer_State, Renderer_State_Access);
@@ -137,6 +153,7 @@ package body Textrender is
          R.State.Italic_Cache.Clear;
          R.State.Glyph_Index_Cache.Clear;
          R.State.Italic_Glyph_Index_Cache.Clear;
+         Free_Colour_Cache (R.State.all);
          Free_State (R.State);
       end if;
    end Finalize;
@@ -157,6 +174,7 @@ package body Textrender is
       R.State.Italic_Cache.Clear;
       R.State.Glyph_Index_Cache.Clear;
       R.State.Italic_Glyph_Index_Cache.Clear;
+      Free_Colour_Cache (R.State.all);
 
       R.State.Pixel_Size    := 1;
       R.State.Cell_Width_V  := 1;
@@ -821,7 +839,6 @@ package body Textrender is
       return Success;
    end Preload;
 
-
    procedure Set_Image_Decoder
      (R      : in out Renderer;
       Extent : Image_Extent_Reader;
@@ -843,9 +860,6 @@ package body Textrender is
       Bitmap      : out Textrender.Fonts.Colour_Bitmap;
       Source_Index : out Natural)
    is
-      use type Textrender.Fonts.Colour_Image_Format;
-      use type Textrender.Fonts.Glyph_Lookup_Result;
-
       procedure Try (F : Textrender.Fonts.Font; Which : Natural) is
          Index : Natural := 0;
       begin
@@ -908,72 +922,17 @@ package body Textrender is
       return Found;
    end Has_Colour_Glyph;
 
-   procedure Ensure_Colour_Atlas (R : in out Renderer) is
-   begin
-      if R.State.Colour_Pixels = null then
-         --  Emoji are few and large: a 512-square atlas holds several hundred at
-         --  text size, and costs a megabyte only if colour glyphs are used at all.
-         R.State.Colour_Width := 512;
-         R.State.Colour_Height := 512;
-         R.State.Colour_Pixels :=
-           new Rgba_Buffer (0 .. R.State.Colour_Width * R.State.Colour_Height * 4 - 1);
-         R.State.Colour_Pixels.all := [others => 0];
-         R.State.Colour_Next_X := 0;
-         R.State.Colour_Next_Y := 0;
-         R.State.Colour_Row_H := 0;
-      end if;
-   end Ensure_Colour_Atlas;
-
-   --  Shelf packing, the same discipline the alpha atlas uses.
-   function Allocate_Colour_Rect
-     (R : in out Renderer;
-      W : Positive;
-      H : Positive;
-      X : out Natural;
-      Y : out Natural)
-      return Boolean is
-   begin
-      X := 0;
-      Y := 0;
-
-      if W > R.State.Colour_Width or else H > R.State.Colour_Height then
-         return False;
-      end if;
-
-      if R.State.Colour_Next_X + W > R.State.Colour_Width then
-         R.State.Colour_Next_X := 0;
-         R.State.Colour_Next_Y := R.State.Colour_Next_Y + R.State.Colour_Row_H;
-         R.State.Colour_Row_H := 0;
-      end if;
-
-      if R.State.Colour_Next_Y + H > R.State.Colour_Height then
-         return False;
-      end if;
-
-      X := R.State.Colour_Next_X;
-      Y := R.State.Colour_Next_Y;
-      R.State.Colour_Next_X := R.State.Colour_Next_X + W;
-
-      if H > R.State.Colour_Row_H then
-         R.State.Colour_Row_H := H;
-      end if;
-
-      return True;
-   end Allocate_Colour_Rect;
-
    function Get_Colour_Glyph
      (R : in out Renderer;
       C : Codepoint;
-      M : out Glyph_Metric)
+      G : out Colour_Glyph)
       return Status_Code
    is
       Found  : Boolean;
       Bitmap : Textrender.Fonts.Colour_Bitmap;
       Source : Natural;
    begin
-      M := (X => 0, Y => 0, W => 0, H => 0,
-            U0 => 0.0, V0 => 0.0, U1 => 0.0, V1 => 0.0,
-            Advance_X => 0.0, Bearing_X => 0.0, Bearing_Y => 0.0);
+      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0);
 
       if R.State = null or else not R.State.Font.Loaded then
          return Font_Not_Loaded;
@@ -984,7 +943,7 @@ package body Textrender is
       end if;
 
       if R.State.Colour_Cache.Contains (C) then
-         M := R.State.Colour_Cache.Element (C);
+         G := R.State.Colour_Cache.Element (C).Glyph;
          return Success;
       end if;
 
@@ -1033,13 +992,10 @@ package body Textrender is
                  Positive'Max (1, Natural (Float'Floor (Float (Src_W) * Scale)));
                Dst_H : constant Positive :=
                  Positive'Max (1, Natural (Float'Floor (Float (Src_H) * Scale)));
-               At_X, At_Y : Natural;
+               Tile : constant Rgba_Buffer_Access :=
+                 new Rgba_Buffer (0 .. Dst_W * Dst_H * 4 - 1);
             begin
-               Ensure_Colour_Atlas (R);
-
-               if not Allocate_Colour_Rect (R, Dst_W, Dst_H, At_X, At_Y) then
-                  return Atlas_Full;
-               end if;
+               Tile.all := [others => 0];
 
                --  Average every source pixel the destination pixel covers. This
                --  is a reduction of six times or more from an emoji strike, and
@@ -1075,38 +1031,28 @@ package body Textrender is
 
                         if Count > 0 then
                            declare
-                              At_Dst : constant Natural :=
-                                ((At_Y + Row) * R.State.Colour_Width + (At_X + Col)) * 4;
+                              At_Dst : constant Natural := (Row * Dst_W + Col) * 4;
                            begin
-                              if At_Dst + 3 <= R.State.Colour_Pixels'Last then
-                                 R.State.Colour_Pixels (At_Dst) := Alpha (Sum_R / Count);
-                                 R.State.Colour_Pixels (At_Dst + 1) := Alpha (Sum_G / Count);
-                                 R.State.Colour_Pixels (At_Dst + 2) := Alpha (Sum_B / Count);
-                                 R.State.Colour_Pixels (At_Dst + 3) := Alpha (Sum_A / Count);
-                              end if;
+                              Tile (At_Dst) := Alpha (Sum_R / Count);
+                              Tile (At_Dst + 1) := Alpha (Sum_G / Count);
+                              Tile (At_Dst + 2) := Alpha (Sum_B / Count);
+                              Tile (At_Dst + 3) := Alpha (Sum_A / Count);
                            end;
                         end if;
                      end;
                   end loop;
                end loop;
 
-               R.State.Colour_Dirty_V := True;
-
-               M :=
-                 (X => At_X, Y => At_Y, W => Dst_W, H => Dst_H,
-                  U0 => Float (At_X) / Float (R.State.Colour_Width),
-                  V0 => Float (At_Y) / Float (R.State.Colour_Height),
-                  U1 => Float (At_X + Dst_W) / Float (R.State.Colour_Width),
-                  V1 => Float (At_Y + Dst_H) / Float (R.State.Colour_Height),
+               G :=
+                 (Width => Dst_W, Height => Dst_H,
                   Advance_X => Float (Box_W),
-                  Bearing_X => 0.0,
                   --  Sit the picture inside the line rather than on the baseline:
                   --  an emoji has no baseline of its own, and centring it in the
                   --  cell is what puts it level with the text beside it.
                   Bearing_Y =>
                     Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2));
 
-               R.State.Colour_Cache.Insert (C, M);
+               R.State.Colour_Cache.Insert (C, (Glyph => G, Pixels => Tile));
                return Success;
             end;
          end;
@@ -1116,35 +1062,16 @@ package body Textrender is
          return Glyph_Missing;
    end Get_Colour_Glyph;
 
-   function Colour_Atlas_Width (R : Renderer) return Positive is
+   function Colour_Glyph_Pixels
+     (R : Renderer;
+      C : Codepoint)
+      return access constant Rgba_Buffer is
    begin
-      return (if R.State = null then 1 else R.State.Colour_Width);
-   end Colour_Atlas_Width;
-
-   function Colour_Atlas_Height (R : Renderer) return Positive is
-   begin
-      return (if R.State = null then 1 else R.State.Colour_Height);
-   end Colour_Atlas_Height;
-
-   function Colour_Atlas_Pixels (R : Renderer) return access constant Rgba_Buffer is
-   begin
-      if R.State = null then
+      if R.State = null or else not R.State.Colour_Cache.Contains (C) then
          return null;
       end if;
 
-      return R.State.Colour_Pixels;
-   end Colour_Atlas_Pixels;
-
-   function Colour_Atlas_Dirty (R : Renderer) return Boolean is
-   begin
-      return R.State /= null and then R.State.Colour_Dirty_V;
-   end Colour_Atlas_Dirty;
-
-   procedure Clear_Colour_Atlas_Dirty (R : in out Renderer) is
-   begin
-      if R.State /= null then
-         R.State.Colour_Dirty_V := False;
-      end if;
-   end Clear_Colour_Atlas_Dirty;
+      return R.State.Colour_Cache.Element (C).Pixels;
+   end Colour_Glyph_Pixels;
 
 end Textrender;

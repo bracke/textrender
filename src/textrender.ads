@@ -372,27 +372,48 @@ package Textrender is
    --  picture for it, and a decoder is installed to read it?
    function Has_Colour_Glyph (R : Renderer; C : Codepoint) return Boolean;
 
-   --  Rasterize a colour glyph into the colour atlas and return where it landed.
+   --  How big a colour glyph's picture is, and where it sits on the line.
+   type Colour_Glyph is record
+      Width  : Natural := 0;
+      Height : Natural := 0;
+
+      --  How far the pen moves afterwards. An emoji is square where the cells
+      --  are tall, so it occupies two of them.
+      Advance_X : Float := 0.0;
+
+      --  Distance up from the baseline to the top of the picture. An emoji has
+      --  no baseline of its own, so this centres it in the line instead.
+      Bearing_Y : Float := 0.0;
+   end record;
+
+   --  Decode a colour glyph and scale it to sit with the text.
    --
-   --  The picture is scaled to the cell so it sits with the text: emoji strikes
-   --  are large (Noto's is 109 ppem with 136x128 bitmaps) so this is usually a
-   --  reduction of six times or more, and it averages the source pixels it
-   --  covers rather than sampling one of them. Dropping pixels at that ratio
-   --  turns a face into confetti.
+   --  Emoji strikes are large -- Noto's is 109 ppem with 136x128 bitmaps -- so
+   --  fitting one to a text line is a reduction of six times or more, and this
+   --  averages every source pixel a destination pixel covers rather than
+   --  sampling one of them. Dropping pixels at that ratio turns a face into
+   --  confetti.
+   --
+   --  The result is kept against the codepoint, so asking again costs nothing.
    function Get_Colour_Glyph
      (R : in out Renderer;
       C : Codepoint;
-      M : out Glyph_Metric)
+      G : out Colour_Glyph)
       return Status_Code;
 
-   --  The colour atlas: four bytes per pixel, R, G, B, A. Separate from the
-   --  alpha atlas because a coverage value and a picture are different things and
-   --  a backend binds them as different textures.
-   function Colour_Atlas_Width (R : Renderer) return Positive;
-   function Colour_Atlas_Height (R : Renderer) return Positive;
-   function Colour_Atlas_Pixels (R : Renderer) return access constant Rgba_Buffer;
-   function Colour_Atlas_Dirty (R : Renderer) return Boolean;
-   procedure Clear_Colour_Atlas_Dirty (R : in out Renderer);
+   --  The decoded picture: four bytes per pixel in R, G, B, A, row by row,
+   --  Width * Height * 4 of them. Null until Get_Colour_Glyph has answered
+   --  Success for this codepoint.
+   --
+   --  This is handed over as a loose tile rather than packed into a colour atlas
+   --  of its own, and that is deliberate. A backend that can draw a picture at
+   --  all already has somewhere to put one -- an icon or thumbnail sheet -- and
+   --  binding a third texture is not free: a descriptor set layout is fixed at
+   --  pipeline creation, so an extra sampler means new shaders, not new code.
+   function Colour_Glyph_Pixels
+     (R : Renderer;
+      C : Codepoint)
+      return access constant Rgba_Buffer;
 
 private
 

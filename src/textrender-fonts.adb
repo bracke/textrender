@@ -813,7 +813,7 @@ package body Textrender.Fonts is
    --  A signed byte read as Ada sees it: CBDT's small metrics store bearings as
    --  int8, and reading them unsigned puts a glyph 256 pixels the wrong way.
    function I8 (F : Font; Offset : Natural) return Integer is
-      Raw : constant Natural := Natural (Byte_At (F, Offset));
+      Raw : constant Natural := Byte_At (F, Offset);
    begin
       return (if Raw >= 128 then Raw - 256 else Raw);
    end I8;
@@ -855,7 +855,7 @@ package body Textrender.Fonts is
             exit when not Has_Bytes (F, Base, 48);
 
             declare
-               Ppem : constant Natural := Natural (Byte_At (F, Base + 44));
+               Ppem : constant Natural := Byte_At (F, Base + 44);
             begin
                if Ppem > 0 then
                   if not Found_Strike then
@@ -937,20 +937,20 @@ package body Textrender.Fonts is
                         begin
                            if Image_Format = 17 then
                               exit when not Has_Bytes (F, Glyph_Data, 9);
-                              Result.Height    := Natural (Byte_At (F, Glyph_Data));
-                              Result.Width     := Natural (Byte_At (F, Glyph_Data + 1));
+                              Result.Height    := Byte_At (F, Glyph_Data);
+                              Result.Width     := Byte_At (F, Glyph_Data + 1);
                               Result.Bearing_X := I8 (F, Glyph_Data + 2);
                               Result.Bearing_Y := I8 (F, Glyph_Data + 3);
-                              Result.Advance   := Natural (Byte_At (F, Glyph_Data + 4));
+                              Result.Advance   := Byte_At (F, Glyph_Data + 4);
                               Result.Data_Length := U32 (F, Glyph_Data + 5);
                               Result.Data_Offset := Glyph_Data + 9;
                            elsif Image_Format = 18 then
                               exit when not Has_Bytes (F, Glyph_Data, 12);
-                              Result.Height    := Natural (Byte_At (F, Glyph_Data));
-                              Result.Width     := Natural (Byte_At (F, Glyph_Data + 1));
+                              Result.Height    := Byte_At (F, Glyph_Data);
+                              Result.Width     := Byte_At (F, Glyph_Data + 1);
                               Result.Bearing_X := I8 (F, Glyph_Data + 2);
                               Result.Bearing_Y := I8 (F, Glyph_Data + 3);
-                              Result.Advance   := Natural (Byte_At (F, Glyph_Data + 4));
+                              Result.Advance   := Byte_At (F, Glyph_Data + 4);
                               Result.Data_Length := U32 (F, Glyph_Data + 8);
                               Result.Data_Offset := Glyph_Data + 12;
                            elsif Image_Format = 19 then

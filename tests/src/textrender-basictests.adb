@@ -1217,12 +1217,11 @@ package body Textrender.BasicTests is
 
    procedure Test_Colour_Glyph_Pipeline (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
-      use type Textrender.Status_Code;
 
       Emoji_Path : constant String :=
         "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
       R : Textrender.Renderer;
-      M : Textrender.Glyph_Metric;
+      G : Textrender.Colour_Glyph;
       Grinning : constant Textrender.Codepoint := 16#1F600#;
    begin
       if not Ada.Directories.Exists (Emoji_Path) then
@@ -1253,45 +1252,54 @@ package body Textrender.BasicTests is
          "with a decoder installed the emoji has a colour glyph");
 
       Assert
-        (Textrender.Get_Colour_Glyph (R, Grinning, M) = Textrender.Success,
-         "and it rasterizes into the colour atlas");
+        (Textrender.Get_Colour_Glyph (R, Grinning, G) = Textrender.Success,
+         "and it decodes into a tile");
 
       --  Scaled to fit two cells, keeping its square aspect: 2x8 wide by 20 high
       --  bounds a 128x128 source to 16x16.
-      Assert (M.W = 16 and then M.H = 16,
+      Assert (G.Width = 16 and then G.Height = 16,
               "the picture is fitted to the cell, got"
-              & Natural'Image (M.W) & " x" & Natural'Image (M.H));
-      Assert (M.W <= 16 and then M.H <= 20, "and stays inside two cells");
-      Assert (M.U1 > M.U0 and then M.V1 > M.V0, "with a non-empty atlas rectangle");
-      Assert (Textrender.Colour_Atlas_Dirty (R), "and marks the colour atlas dirty");
+              & Natural'Image (G.Width) & " x" & Natural'Image (G.Height));
+      Assert (G.Advance_X = 16.0, "and advances across the two cells it fills");
 
-      --  The averaged result: left half red, right half blue.
+      --  The averaged result: left half red, right half blue. The tile is its
+      --  own picture, so it is addressed by its own width, with no atlas origin
+      --  to offset by.
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
-           Textrender.Colour_Atlas_Pixels (R);
-         Stride : constant Natural := Textrender.Colour_Atlas_Width (R);
+           Textrender.Colour_Glyph_Pixels (R, Grinning);
 
          function At_Pixel (Col : Natural; Row : Natural; Channel : Natural) return Natural is
-           (Natural (Pixels (((M.Y + Row) * Stride + (M.X + Col)) * 4 + Channel)));
+           (Natural (Pixels ((Row * G.Width + Col) * 4 + Channel)));
       begin
-         Assert (Pixels /= null, "the colour atlas has pixels");
-         Assert (At_Pixel (1, M.H / 2, 0) > 200, "the left of the glyph is red");
-         Assert (At_Pixel (1, M.H / 2, 2) < 60, "and not blue");
-         Assert (At_Pixel (M.W - 2, M.H / 2, 2) > 200, "the right of the glyph is blue");
-         Assert (At_Pixel (M.W - 2, M.H / 2, 0) < 60, "and not red");
-         Assert (At_Pixel (1, M.H / 2, 3) > 200, "and it is opaque");
+         Assert (Pixels /= null, "the glyph has pixels");
+         Assert (Pixels'Length = G.Width * G.Height * 4,
+                 "exactly four bytes for each pixel of it, got"
+                 & Natural'Image (Pixels'Length));
+         Assert (At_Pixel (1, G.Height / 2, 0) > 200, "the left of the glyph is red");
+         Assert (At_Pixel (1, G.Height / 2, 2) < 60, "and not blue");
+         Assert (At_Pixel (G.Width - 2, G.Height / 2, 2) > 200, "the right of the glyph is blue");
+         Assert (At_Pixel (G.Width - 2, G.Height / 2, 0) < 60, "and not red");
+         Assert (At_Pixel (1, G.Height / 2, 3) > 200, "and it is opaque");
       end;
 
-      --  Asked twice, packed once.
+      --  Asked twice, decoded once: the same tile comes back, not an equal copy
+      --  of it. Comparing the pixels would pass even if it decoded again.
       declare
-         Again : Textrender.Glyph_Metric;
+         Again : Textrender.Colour_Glyph;
+         First : constant access constant Textrender.Rgba_Buffer :=
+           Textrender.Colour_Glyph_Pixels (R, Grinning);
       begin
          Assert
            (Textrender.Get_Colour_Glyph (R, Grinning, Again) = Textrender.Success,
             "a second request succeeds");
-         Assert (Again.X = M.X and then Again.Y = M.Y,
-                 "from the cache rather than a second atlas rectangle");
+         Assert (Textrender.Colour_Glyph_Pixels (R, Grinning) = First,
+                 "from the cache rather than a second decode");
       end;
+
+      --  An unknown codepoint has no tile at all.
+      Assert (Textrender.Colour_Glyph_Pixels (R, Character'Pos ('A')) = null,
+              "a codepoint with no colour glyph has no pixels");
 
       Textrender.Reset (R);
    end Test_Colour_Glyph_Pipeline;
@@ -1308,8 +1316,8 @@ package body Textrender.BasicTests is
    procedure Test_Colour_Bitmap_Font (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
 
-      use type Textrender.Fonts.Load_Result;
       use type Textrender.Fonts.Colour_Image_Format;
+
       Emoji_Path : constant String :=
         "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
       F : Textrender.Fonts.Font;
