@@ -59,16 +59,11 @@ package body Textrender is
 
    type Rgba_Buffer_Access is access all Rgba_Buffer;
 
-   --  A colour glyph that has been decoded and scaled, held as its own tile.
-   type Colour_Tile is record
-      Glyph  : Colour_Glyph;
-      Pixels : Rgba_Buffer_Access := null;
-   end record;
-
-   --  Colour glyphs already decoded, by codepoint.
+   --  Colour glyphs already packed, by codepoint. The picture itself lives in
+   --  the sheet; what is kept here is where in it, and the metrics.
    package Colour_Caches is new Ada.Containers.Hashed_Maps
      (Key_Type        => Codepoint,
-      Element_Type    => Colour_Tile,
+      Element_Type    => Colour_Glyph,
       Hash            => Codepoint_Hash,
       Equivalent_Keys => "=");
 
@@ -85,10 +80,21 @@ package body Textrender is
       Cell_Height_V : Positive := 1;
       Atlas_Dirty_V : Boolean := False;
 
-      --  Colour glyphs, one decoded tile each. Not packed into an atlas here:
-      --  a picture is not a coverage mask, and whoever draws pictures already
-      --  has a sheet to put one on.
-      Colour_Cache : Colour_Caches.Map;
+      --  Colour glyphs: where each one sits, and the sheet they sit in.
+      --
+      --  Packed here rather than by the caller because every caller that drew
+      --  these packed them itself, and kept its own record of which codepoint
+      --  had been packed -- duplicating the cache below.
+      Colour_Cache  : Colour_Caches.Map;
+      Colour_Sheet  : Rgba_Buffer_Access := null;
+      Colour_Width  : Natural := 0;
+      Colour_Height : Natural := 0;
+      Colour_Dirty_V : Boolean := False;
+
+      --  Shelf packing state: the pen, and how tall the current shelf is.
+      Colour_Pen_X  : Natural := 0;
+      Colour_Pen_Y  : Natural := 0;
+      Colour_Shelf  : Natural := 0;
 
       --  The caller's decoder, or null for "colour glyphs unavailable".
       Extent_Reader : Image_Extent_Reader := null;
@@ -109,17 +115,21 @@ package body Textrender is
    procedure Free_Rgba is new Ada.Unchecked_Deallocation
      (Rgba_Buffer, Rgba_Buffer_Access);
 
-   --  Colour tiles are one allocation per glyph, so they have to be handed back.
-   --  Clearing the map alone would leak them, and dropping the map without
-   --  clearing it would hand out pictures decoded from a font that is gone.
+   --  The sheet is one allocation; dropping the map without freeing it would
+   --  leak, and keeping the map without the sheet would hand out coordinates
+   --  into a picture that is gone.
    procedure Free_Colour_Cache (State : in out Renderer_State);
 
    procedure Free_Colour_Cache (State : in out Renderer_State) is
    begin
-      for Tile of State.Colour_Cache loop
-         Free_Rgba (Tile.Pixels);
-      end loop;
-
+      Free_Rgba (State.Colour_Sheet);
+      State.Colour_Sheet := null;
+      State.Colour_Width := 0;
+      State.Colour_Height := 0;
+      State.Colour_Pen_X := 0;
+      State.Colour_Pen_Y := 0;
+      State.Colour_Shelf := 0;
+      State.Colour_Dirty_V := False;
       State.Colour_Cache.Clear;
    end Free_Colour_Cache;
 
@@ -1120,7 +1130,7 @@ package body Textrender is
          else Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index).Glyph_Index);
    begin
       Tile := null;
-      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0);
+      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0, others => <>);
 
       if Count = 0 then
          return False;
@@ -1283,13 +1293,131 @@ package body Textrender is
          G :=
            (Width => Dst_W, Height => Dst_H,
             Advance_X => Float (Box_W),
-            Bearing_Y => Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2));
+            Bearing_Y => Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2),
+            others => <>);
          return True;
       end;
    exception
       when others =>
          return False;
    end Build_Layered_Tile;
+
+   Colour_Sheet_Side : constant := 512;
+
+   --  Find room for a picture in the sheet and note where it went.
+   --
+   --  Shelf packing: a run left to right, wrapping to a new shelf as tall as the
+   --  tallest tile on the last one. Emoji are all about a line tall, so the waste
+   --  is slight and the alternative -- a real packer -- would be more code than
+   --  the problem deserves.
+   procedure Place_In_Colour_Sheet
+     (R      : in out Renderer;
+      Width  : Positive;
+      Height : Positive;
+      X      : out Natural;
+      Y      : out Natural;
+      Placed : out Boolean);
+
+   procedure Place_In_Colour_Sheet
+     (R      : in out Renderer;
+      Width  : Positive;
+      Height : Positive;
+      X      : out Natural;
+      Y      : out Natural;
+      Placed : out Boolean) is
+   begin
+      X := 0;
+      Y := 0;
+      Placed := False;
+
+      if Width > Colour_Sheet_Side then
+         return;
+      end if;
+
+      if R.State.Colour_Sheet = null then
+         R.State.Colour_Sheet :=
+           new Rgba_Buffer (0 .. Colour_Sheet_Side * Colour_Sheet_Side * 4 - 1);
+         R.State.Colour_Sheet.all := [others => 0];
+         R.State.Colour_Width := Colour_Sheet_Side;
+         R.State.Colour_Height := Colour_Sheet_Side;
+      end if;
+
+      if R.State.Colour_Pen_X + Width > Colour_Sheet_Side then
+         R.State.Colour_Pen_X := 0;
+         R.State.Colour_Pen_Y := R.State.Colour_Pen_Y + R.State.Colour_Shelf;
+         R.State.Colour_Shelf := 0;
+      end if;
+
+      if R.State.Colour_Pen_Y + Height > Colour_Sheet_Side then
+         return;
+      end if;
+
+      X := R.State.Colour_Pen_X;
+      Y := R.State.Colour_Pen_Y;
+      R.State.Colour_Pen_X := R.State.Colour_Pen_X + Width;
+      R.State.Colour_Shelf := Natural'Max (R.State.Colour_Shelf, Height);
+      Placed := True;
+   end Place_In_Colour_Sheet;
+
+   --  Copy a freshly built tile into the sheet, record where it went, and let the
+   --  tile go. Both routes to a colour glyph -- a decoded picture and composited
+   --  layers -- end here.
+   function Commit_Colour_Tile
+     (R    : in out Renderer;
+      C    : Codepoint;
+      Tile : in out Rgba_Buffer_Access;
+      G    : in out Colour_Glyph)
+      return Boolean
+   is
+      X, Y   : Natural;
+      Placed : Boolean;
+   begin
+      if Tile = null or else G.Width = 0 or else G.Height = 0 then
+         Free_Rgba (Tile);
+         Tile := null;
+         return False;
+      end if;
+
+      Place_In_Colour_Sheet (R, G.Width, G.Height, X, Y, Placed);
+
+      if not Placed then
+         Free_Rgba (Tile);
+         Tile := null;
+         return False;
+      end if;
+
+      for Row in 0 .. G.Height - 1 loop
+         for Column in 0 .. G.Width - 1 loop
+            declare
+               From : constant Natural := (Row * G.Width + Column) * 4;
+               Into : constant Natural :=
+                 ((Y + Row) * R.State.Colour_Width + X + Column) * 4;
+            begin
+               if From + 3 <= Tile'Last
+                 and then Into + 3 <= R.State.Colour_Sheet'Last
+               then
+                  for Channel in 0 .. 3 loop
+                     R.State.Colour_Sheet (Into + Channel) := Tile (From + Channel);
+                  end loop;
+               end if;
+            end;
+         end loop;
+      end loop;
+
+      Free_Rgba (Tile);
+      Tile := null;
+
+      G.X := X;
+      G.Y := Y;
+      G.U0 := Float (X) / Float (R.State.Colour_Width);
+      G.V0 := Float (Y) / Float (R.State.Colour_Height);
+      G.U1 := Float (X + G.Width) / Float (R.State.Colour_Width);
+      G.V1 := Float (Y + G.Height) / Float (R.State.Colour_Height);
+
+      R.State.Colour_Dirty_V := True;
+      R.State.Colour_Cache.Insert (C, G);
+      return True;
+   end Commit_Colour_Tile;
 
    function Get_Colour_Glyph
      (R : in out Renderer;
@@ -1301,14 +1429,14 @@ package body Textrender is
       Bitmap : Textrender.Fonts.Colour_Bitmap;
       Source : Natural;
    begin
-      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0);
+      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0, others => <>);
 
       if R.State = null or else not R.State.Font.Loaded then
          return Font_Not_Loaded;
       end if;
 
       if R.State.Colour_Cache.Contains (C) then
-         G := R.State.Colour_Cache.Element (C).Glyph;
+         G := R.State.Colour_Cache.Element (C);
          return Success;
       end if;
 
@@ -1331,9 +1459,8 @@ package body Textrender is
                       then R.State.Font
                       else R.State.Fallbacks (Layer_Source)),
                      Layer_Glyph, Tile, G)
-                 and then Tile /= null
+                 and then Commit_Colour_Tile (R, C, Tile, G)
                then
-                  R.State.Colour_Cache.Insert (C, (Glyph => G, Pixels => Tile));
                   return Success;
                end if;
             end;
@@ -1389,7 +1516,7 @@ package body Textrender is
                  Positive'Max (1, Natural (Float'Floor (Float (Src_W) * Scale)));
                Dst_H : constant Positive :=
                  Positive'Max (1, Natural (Float'Floor (Float (Src_H) * Scale)));
-               Tile : constant Rgba_Buffer_Access :=
+               Tile : Rgba_Buffer_Access :=
                  new Rgba_Buffer (0 .. Dst_W * Dst_H * 4 - 1);
             begin
                Tile.all := [others => 0];
@@ -1447,9 +1574,13 @@ package body Textrender is
                   --  an emoji has no baseline of its own, and centring it in the
                   --  cell is what puts it level with the text beside it.
                   Bearing_Y =>
-                    Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2));
+                    Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2),
+                  others => <>);
 
-               R.State.Colour_Cache.Insert (C, (Glyph => G, Pixels => Tile));
+               if not Commit_Colour_Tile (R, C, Tile, G) then
+                  return Atlas_Full;
+               end if;
+
                return Success;
             end;
          end;
@@ -1459,16 +1590,29 @@ package body Textrender is
          return Glyph_Missing;
    end Get_Colour_Glyph;
 
-   function Colour_Glyph_Pixels
-     (R : Renderer;
-      C : Codepoint)
-      return access constant Rgba_Buffer is
+   function Colour_Sheet_Width (R : Renderer) return Natural is
+     (if R.State = null then 0 else R.State.Colour_Width);
+
+   function Colour_Sheet_Height (R : Renderer) return Natural is
+     (if R.State = null then 0 else R.State.Colour_Height);
+
+   function Colour_Sheet_Pixels (R : Renderer) return access constant Rgba_Buffer is
    begin
-      if R.State = null or else not R.State.Colour_Cache.Contains (C) then
+      if R.State = null then
          return null;
       end if;
 
-      return R.State.Colour_Cache.Element (C).Pixels;
-   end Colour_Glyph_Pixels;
+      return R.State.Colour_Sheet;
+   end Colour_Sheet_Pixels;
+
+   function Colour_Sheet_Dirty (R : Renderer) return Boolean is
+     (R.State /= null and then R.State.Colour_Dirty_V);
+
+   procedure Clear_Colour_Sheet_Dirty (R : in out Renderer) is
+   begin
+      if R.State /= null then
+         R.State.Colour_Dirty_V := False;
+      end if;
+   end Clear_Colour_Sheet_Dirty;
 
 end Textrender;

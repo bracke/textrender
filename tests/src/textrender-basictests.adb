@@ -219,19 +219,20 @@ package body Textrender.BasicTests is
 
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
-           Textrender.Colour_Glyph_Pixels (R, Rainbow);
+           Textrender.Colour_Sheet_Pixels (R);
+         Stride : constant Natural := Textrender.Colour_Sheet_Width (R);
          Opaque : Natural := 0;
          Distinct_Hues : Natural := 0;
          Seen_R : array (0 .. 7) of Boolean := [others => False];
       begin
-         Assert (Pixels /= null, "with pixels behind it");
+         Assert (Pixels /= null, "with a sheet behind it");
 
          for Pixel in 0 .. G.Width * G.Height - 1 loop
             declare
-               Red   : constant Natural := Natural (Pixels (Pixel * 4));
-               Green : constant Natural := Natural (Pixels (Pixel * 4 + 1));
-               Blue  : constant Natural := Natural (Pixels (Pixel * 4 + 2));
-               A     : constant Natural := Natural (Pixels (Pixel * 4 + 3));
+               Red   : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
+               Green : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
+               Blue  : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
+               A     : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
             begin
                if A > 128 then
                   Opaque := Opaque + 1;
@@ -317,20 +318,19 @@ package body Textrender.BasicTests is
 
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
-           Textrender.Colour_Glyph_Pixels (R, Party);
+           Textrender.Colour_Sheet_Pixels (R);
+         Stride : constant Natural := Textrender.Colour_Sheet_Width (R);
          Opaque  : Natural := 0;
          Coloured : Natural := 0;
       begin
-         Assert (Pixels /= null, "with pixels behind it");
-         Assert (Pixels'Length = G.Width * G.Height * 4,
-                 "four bytes for each of them");
+         Assert (Pixels /= null, "with a sheet behind it");
 
          for Pixel in 0 .. G.Width * G.Height - 1 loop
             declare
-               Red   : constant Natural := Natural (Pixels (Pixel * 4));
-               Green : constant Natural := Natural (Pixels (Pixel * 4 + 1));
-               Blue  : constant Natural := Natural (Pixels (Pixel * 4 + 2));
-               A     : constant Natural := Natural (Pixels (Pixel * 4 + 3));
+               Red   : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
+               Green : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
+               Blue  : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
+               A     : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
             begin
                if A > 128 then
                   Opaque := Opaque + 1;
@@ -1580,15 +1580,15 @@ package body Textrender.BasicTests is
       --  to offset by.
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
-           Textrender.Colour_Glyph_Pixels (R, Grinning);
+           Textrender.Colour_Sheet_Pixels (R);
+         Stride : constant Natural := Textrender.Colour_Sheet_Width (R);
 
          function At_Pixel (Col : Natural; Row : Natural; Channel : Natural) return Natural is
-           (Natural (Pixels ((Row * G.Width + Col) * 4 + Channel)));
+           (Natural (Pixels (((G.Y + Row) * Stride + G.X + Col) * 4 + Channel)));
       begin
-         Assert (Pixels /= null, "the glyph has pixels");
-         Assert (Pixels'Length = G.Width * G.Height * 4,
-                 "exactly four bytes for each pixel of it, got"
-                 & Natural'Image (Pixels'Length));
+         Assert (Pixels /= null, "the sheet has pixels");
+         Assert (G.U1 > G.U0 and then G.V1 > G.V0,
+                 "and the glyph names a rectangle of it");
          Assert (At_Pixel (1, G.Height / 2, 0) > 200, "the left of the glyph is red");
          Assert (At_Pixel (1, G.Height / 2, 2) < 60, "and not blue");
          Assert (At_Pixel (G.Width - 2, G.Height / 2, 2) > 200, "the right of the glyph is blue");
@@ -1600,19 +1600,13 @@ package body Textrender.BasicTests is
       --  of it. Comparing the pixels would pass even if it decoded again.
       declare
          Again : Textrender.Colour_Glyph;
-         First : constant access constant Textrender.Rgba_Buffer :=
-           Textrender.Colour_Glyph_Pixels (R, Grinning);
       begin
          Assert
            (Textrender.Get_Colour_Glyph (R, Grinning, Again) = Textrender.Success,
             "a second request succeeds");
-         Assert (Textrender.Colour_Glyph_Pixels (R, Grinning) = First,
-                 "from the cache rather than a second decode");
+         Assert (Again.X = G.X and then Again.Y = G.Y,
+                 "from the same place in the sheet rather than a second decode");
       end;
-
-      --  An unknown codepoint has no tile at all.
-      Assert (Textrender.Colour_Glyph_Pixels (R, Character'Pos ('A')) = null,
-              "a codepoint with no colour glyph has no pixels");
 
       Textrender.Reset (R);
    end Test_Colour_Glyph_Pipeline;

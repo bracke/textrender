@@ -377,6 +377,16 @@ package Textrender is
       Width  : Natural := 0;
       Height : Natural := 0;
 
+      --  Where the picture sits in the colour sheet, in pixels and as texture
+      --  coordinates. Every consumer wanted both and worked one out from the
+      --  other, so both are given.
+      X  : Natural := 0;
+      Y  : Natural := 0;
+      U0 : Float := 0.0;
+      V0 : Float := 0.0;
+      U1 : Float := 0.0;
+      V1 : Float := 0.0;
+
       --  How far the pen moves afterwards. An emoji is square where the cells
       --  are tall, so it occupies two of them.
       Advance_X : Float := 0.0;
@@ -401,19 +411,23 @@ package Textrender is
       G : out Colour_Glyph)
       return Status_Code;
 
-   --  The decoded picture: four bytes per pixel in R, G, B, A, row by row,
-   --  Width * Height * 4 of them. Null until Get_Colour_Glyph has answered
-   --  Success for this codepoint.
+   --  The sheet the colour glyphs are packed into: four bytes per pixel in
+   --  R, G, B, A, row by row, Width * Height * 4 of them.
    --
-   --  This is handed over as a loose tile rather than packed into a colour atlas
-   --  of its own, and that is deliberate. A backend that can draw a picture at
-   --  all already has somewhere to put one -- an icon or thumbnail sheet -- and
-   --  binding a third texture is not free: a descriptor set layout is fixed at
-   --  pipeline creation, so an extra sampler means new shaders, not new code.
-   function Colour_Glyph_Pixels
-     (R : Renderer;
-      C : Codepoint)
-      return access constant Rgba_Buffer;
+   --  One sheet rather than a tile per glyph, because every backend that drew
+   --  these ended up packing them itself -- and keeping its own map of which
+   --  codepoint had been packed already, on top of the one kept here. Packing
+   --  it once, where the tiles are decoded and already deduplicated, is a sheet
+   --  a backend can upload as it stands.
+   --
+   --  Null until a colour glyph has been asked for.
+   function Colour_Sheet_Width (R : Renderer) return Natural;
+   function Colour_Sheet_Height (R : Renderer) return Natural;
+   function Colour_Sheet_Pixels (R : Renderer) return access constant Rgba_Buffer;
+
+   --  True when a glyph has been added since the sheet was last taken.
+   function Colour_Sheet_Dirty (R : Renderer) return Boolean;
+   procedure Clear_Colour_Sheet_Dirty (R : in out Renderer);
 
 private
 
