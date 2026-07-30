@@ -10,8 +10,41 @@ package body Textrender.BasicTests is
    use type Textrender.Fonts.Glyph_Lookup_Result;
    use type Textrender.Fonts.Load_Result;
 
-   Font_Path : constant String :=
-     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
+   --  A monospaced font belonging to the host these tests are running on.
+   --
+   --  Every host keeps its fonts somewhere else under some other name, so this
+   --  is a search rather than a path. Which face it finds does not matter to
+   --  what is being tested -- these are outlines, metrics and atlas bookkeeping,
+   --  not a particular typeface -- but it must be a real font, because a
+   --  synthetic one would not exercise the parser.
+   --
+   --  DejaVu comes first so a Linux machine and Linux CI agree on the face, and
+   --  the tests that compare one atlas checksum against another keep comparing
+   --  like with like.
+   Test_Font_Candidates : constant array (Positive range <>) of access constant String :=
+     [new String'("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+      new String'("/usr/share/fonts/TTF/DejaVuSansMono.ttf"),
+      new String'("/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf"),
+      new String'("/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf"),
+      new String'("/System/Library/Fonts/Menlo.ttc"),
+      new String'("/System/Library/Fonts/Monaco.ttf"),
+      new String'("C:\Windows\Fonts\consola.ttf"),
+      new String'("C:\Windows\Fonts\cour.ttf")];
+
+   function Resolve_Test_Font return String;
+
+   function Resolve_Test_Font return String is
+   begin
+      for Candidate of Test_Font_Candidates loop
+         if Ada.Directories.Exists (Candidate.all) then
+            return Candidate.all;
+         end if;
+      end loop;
+
+      return "";
+   end Resolve_Test_Font;
+
+   Font_Path : constant String := Resolve_Test_Font;
 
    R : Textrender.Renderer;
 
@@ -48,6 +81,19 @@ package body Textrender.BasicTests is
 
       return False;
    end Atlas_Has_Nonzero_Pixel;
+
+   --  If this fails nothing else in the suite means anything: every test that
+   --  follows loads this font, and each of them would report a missing fixture
+   --  as a defect in the parser.
+   procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Font_Path /= "",
+              "no monospaced font on this host: looked under /usr/share/fonts,"
+              & " /System/Library/Fonts and C:\Windows\Fonts");
+   end Test_Test_Font_Exists;
 
    procedure Test_Get_Glyph_Before_Load
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1382,6 +1428,11 @@ package body Textrender.BasicTests is
      (T : in out Textrender_Basic_Case)
    is
    begin
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Test_Font_Exists'Access,
+         "a monospaced font for the tests exists on this host");
+
       AUnit.Test_Cases.Registration.Register_Routine
         (T,
          Test_Get_Glyph_Before_Load'Access,
