@@ -31,6 +31,12 @@ package body Textrender.BasicTests is
       new String'("C:\Windows\Fonts\consola.ttf"),
       new String'("C:\Windows\Fonts\cour.ttf")];
 
+   --  Where each host keeps its colour emoji font.
+   Colour_Font_Candidates : constant array (Positive range <>) of access constant String :=
+     [new String'("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
+      new String'("/System/Library/Fonts/Apple Color Emoji.ttc"),
+      new String'("C:\Windows\Fonts\seguiemj.ttf")];
+
    function Resolve_Test_Font return String;
 
    function Resolve_Test_Font return String is
@@ -86,6 +92,68 @@ package body Textrender.BasicTests is
    --  follows loads this font, and each of them would report a missing fixture
    --  as a defect in the parser.
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class);
+   procedure Test_Host_Colour_Font_Has_Pictures (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  Whichever colour font the host ships, find a picture in it.
+   --
+   --  The point is the macOS half. Apple Color Emoji keeps its pictures in sbix
+   --  and Noto keeps them in CBDT, and the sbix reader was written from the
+   --  specification against a font this machine does not have -- so until this
+   --  ran on a macOS runner, nothing had ever executed it.
+   --
+   --  Deliberately asks less than the Noto-specific tests below: only that the
+   --  font loads, maps an emoji, and has a decodable picture for it. Whether it
+   --  also lacks outlines, and at what size it stores them, is each font's own
+   --  business and not something both formats agree on.
+   procedure Test_Host_Colour_Font_Has_Pictures (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Textrender.Fonts.Colour_Image_Format;
+
+      Grinning : constant Textrender.Fonts.Codepoint := 16#1F600#;
+      Found    : Boolean := False;
+   begin
+      for Candidate of Colour_Font_Candidates loop
+         if Ada.Directories.Exists (Candidate.all) then
+            declare
+               F     : Textrender.Fonts.Font;
+               Index : Natural := 0;
+            begin
+               --  A font that will not load is not a skip, it is a failure: the
+               --  file is there and this crate claims to read it.
+               Assert (Textrender.Fonts.Load (F, Candidate.all) = Textrender.Fonts.Loaded,
+                       "the host colour font loads: " & Candidate.all);
+
+               --  Segoe UI Emoji is COLR/CPAL, which is not read yet, so it has
+               --  no bitmaps to find. Say so rather than failing for it.
+               if Textrender.Fonts.Has_Colour_Bitmaps (F) then
+                  Assert (Textrender.Fonts.Glyph_Index_Of (F, Grinning, Index),
+                          "it maps the grinning face: " & Candidate.all);
+
+                  declare
+                     Bitmap : constant Textrender.Fonts.Colour_Bitmap :=
+                       Textrender.Fonts.Colour_Bitmap_For (F, Index, 16);
+                  begin
+                     Assert (Bitmap.Format = Textrender.Fonts.Png_Colour_Image,
+                             "and holds a picture for it: " & Candidate.all);
+                     Assert (Bitmap.Width > 0 and then Bitmap.Height > 0,
+                             "of a real size: " & Candidate.all);
+                     Assert (Bitmap.Data_Length > 0,
+                             "with bytes behind it: " & Candidate.all);
+                  end;
+
+                  Found := True;
+               end if;
+
+               Textrender.Fonts.Reset (F);
+            end;
+         end if;
+      end loop;
+
+      --  No colour font installed is a skip; this only records that it happened.
+      if not Found then
+         Assert (True, "no colour font on this host");
+      end if;
+   end Test_Host_Colour_Font_Has_Pictures;
 
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -1432,6 +1500,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Test_Font_Exists'Access,
          "a monospaced font for the tests exists on this host");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Host_Colour_Font_Has_Pictures'Access,
+         "whatever colour font this host ships, a picture can be found in it");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,
