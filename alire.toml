@@ -6,6 +6,7 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = "https://github.com/bracke/textrender"
+long-description = "Textrender renders TrueType glyphs into a monospace text atlas for editor-style rendering."
 tags = ["textrender", "monospace"]
 
 [[depends-on]]
