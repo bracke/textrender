@@ -1077,8 +1077,35 @@ package body Textrender.Fonts is
             Result.Data_Length := (End_Off - Start_Off) - 8;
 
             if Has_Bytes (F, Result.Data_Offset, Result.Data_Length) then
-               Result.Format := Png_Colour_Image;
-               Result.Ppem := Positive'Max (1, Best_Ppem);
+               --  sbix keeps no size of its own. A record is an origin, a format
+               --  tag, and then the picture -- so unlike CBDT, whose glyph record
+               --  states height and width, the only place the dimensions exist is
+               --  inside the image. Read them from PNG's IHDR, where they sit as
+               --  big-endian words at fixed offsets 16 and 20. That is reading a
+               --  header, not decoding an image, which this crate leaves to its
+               --  caller.
+               if Result.Data_Length >= 24
+                 and then Has_Bytes (F, Result.Data_Offset, 24)
+               then
+                  declare
+                     W : constant Natural := U32 (F, Result.Data_Offset + 16);
+                     H : constant Natural := U32 (F, Result.Data_Offset + 20);
+                  begin
+                     --  A dimension in a header is not a promise.
+                     if W in 1 .. 16_384 and then H in 1 .. 16_384 then
+                        Result.Width := W;
+                        Result.Height := H;
+                     end if;
+                  end;
+               end if;
+
+               --  A picture whose size could not be established is no use to a
+               --  caller that has to allocate for it, so it is not offered.
+               if Result.Width > 0 and then Result.Height > 0 then
+                  Result.Format := Png_Colour_Image;
+                  Result.Ppem := Positive'Max (1, Best_Ppem);
+                  Result.Advance := Result.Width;
+               end if;
             end if;
          end;
       end;
