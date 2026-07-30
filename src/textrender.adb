@@ -352,9 +352,19 @@ package body Textrender is
       --  correct: C always resolves through the same font.
       Selected := R.State.Font;
 
+      --  Skip a font that maps the codepoint but cannot draw it. Has_Glyph is a
+      --  character-map lookup, and mapping is not the same as being able to
+      --  render: a colour font is all bitmaps and has no outlines at all, so
+      --  selecting one here would commit to it and then fail, because the loop
+      --  below exits on the first match and never reconsiders. Noto Color Emoji
+      --  maps a good deal more than emoji -- stars, arrows, ticks that the text
+      --  fallbacks also carry -- so without this, adding it to the chain would
+      --  make those characters disappear instead of drawing from DejaVu.
       if not Textrender.Fonts.Has_Glyph (R.State.Font, C) then
          for F of R.State.Fallbacks loop
-            if Textrender.Fonts.Has_Glyph (F, C) then
+            if Textrender.Fonts.Has_Glyph (F, C)
+              and then not Textrender.Fonts.Is_Bitmap_Only (F)
+            then
                Selected := F;
                exit;
             end if;
