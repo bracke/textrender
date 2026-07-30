@@ -1,3 +1,4 @@
+with Ada.Numerics.Elementary_Functions; use Ada.Numerics.Elementary_Functions;
 with Textrender.Fonts; use Textrender.Fonts;
 with Textrender.Atlases;
 with Textrender.Rasterizer;
@@ -953,7 +954,10 @@ package body Textrender is
       procedure Try (F : Textrender.Fonts.Font; Which : Natural) is
          Index : Natural := 0;
       begin
-         if Found or else not Textrender.Fonts.Has_Colour_Layers (F) then
+         if Found
+           or else not (Textrender.Fonts.Has_Colour_Layers (F)
+                        or else Textrender.Fonts.Has_Colour_Paints (F))
+         then
             return;
          end if;
 
@@ -961,7 +965,9 @@ package body Textrender is
             return;
          end if;
 
-         if Textrender.Fonts.Colour_Layer_Count (F, Index) > 0 then
+         if Textrender.Fonts.Colour_Layer_Count (F, Index) > 0
+           or else Textrender.Fonts.Has_Paint_Graph (F, Index)
+         then
             Found := True;
             Glyph_Index := Index;
             Source_Index := Which;
@@ -1006,10 +1012,112 @@ package body Textrender is
       G     : out Colour_Glyph)
       return Boolean
    is
-      Count : constant Natural := Textrender.Fonts.Colour_Layer_Count (Font, Glyph);
+      V0_Count : constant Natural := Textrender.Fonts.Colour_Layer_Count (Font, Glyph);
+
+      Draws     : Textrender.Fonts.Colour_Draw_Array;
+      Draw_Count : Natural := 0;
+      Layered   : constant Boolean :=
+        Textrender.Fonts.Colour_Draws_For (Font, Glyph, Draws, Draw_Count);
+
+      Count : constant Natural := (if Layered then Draw_Count else V0_Count);
+
+      --  The colour a fill gives at a point, in font units before the draw's
+      --  transform. A solid answers the same everywhere; a gradient is evaluated
+      --  where the pixel falls.
+      procedure Fill_At
+        (Fill : Textrender.Fonts.Paint_Fill;
+         X, Y : Float;
+         Red, Green, Blue, Opacity : out Natural);
+
+      procedure Fill_At
+        (Fill : Textrender.Fonts.Paint_Fill;
+         X, Y : Float;
+         Red, Green, Blue, Opacity : out Natural)
+      is
+         T : Float := 0.0;
+      begin
+         Red := Fill.Red;
+         Green := Fill.Green;
+         Blue := Fill.Blue;
+         Opacity := Fill.Alpha;
+
+         if Fill.Kind = Textrender.Fonts.Solid_Fill or else Fill.Stop_Count = 0 then
+            return;
+         end if;
+
+         if Fill.Kind = Textrender.Fonts.Linear_Gradient then
+            --  Distance along p0->p1, which is what the stop offsets index.
+            declare
+               DX_L : constant Float := Fill.X1 - Fill.X0;
+               DY_L : constant Float := Fill.Y1 - Fill.Y0;
+               Len2 : constant Float := DX_L * DX_L + DY_L * DY_L;
+            begin
+               if Len2 <= 0.0 then
+                  T := 0.0;
+               else
+                  T := ((X - Fill.X0) * DX_L + (Y - Fill.Y0) * DY_L) / Len2;
+               end if;
+            end;
+         else
+            --  Radial, approximated by distance from the outer circle's centre
+            --  between the two radii. The two-circle form this format allows is
+            --  rare and its cone is not built here.
+            declare
+               DX_R : constant Float := X - Fill.X1;
+               DY_R : constant Float := Y - Fill.Y1;
+               Dist : constant Float := Sqrt (DX_R * DX_R + DY_R * DY_R);
+               Span : constant Float := Fill.Radius_1 - Fill.Radius_0;
+            begin
+               if Span <= 0.0 then
+                  T := 0.0;
+               else
+                  T := (Dist - Fill.Radius_0) / Span;
+               end if;
+            end;
+         end if;
+
+         --  Pad: the end stops carry on outside the line.
+         T := Float'Max (0.0, Float'Min (1.0, T));
+
+         declare
+            Lower : Natural := 1;
+            Upper : Natural := Fill.Stop_Count;
+         begin
+            for Index in 1 .. Fill.Stop_Count loop
+               if Fill.Stops (Index).Position <= T then
+                  Lower := Index;
+               end if;
+            end loop;
+
+            Upper := Natural'Min (Fill.Stop_Count, Lower + 1);
+
+            declare
+               A : constant Textrender.Fonts.Colour_Stop := Fill.Stops (Lower);
+               B : constant Textrender.Fonts.Colour_Stop := Fill.Stops (Upper);
+               Span : constant Float := B.Position - A.Position;
+               F    : constant Float :=
+                 (if Span <= 0.0 then 0.0
+                  else Float'Max (0.0, Float'Min (1.0, (T - A.Position) / Span)));
+            begin
+               Red := A.Red + Natural (Float (B.Red - A.Red) * F);
+               Green := A.Green + Natural (Float (B.Green - A.Green) * F);
+               Blue := A.Blue + Natural (Float (B.Blue - A.Blue) * F);
+               Opacity := A.Alpha + Natural (Float (B.Alpha - A.Alpha) * F);
+            end;
+         end;
+      exception
+         when others =>
+            null;
+      end Fill_At;
 
       X_Min, Y_Min, X_Max, Y_Max : Integer := 0;
       Have_Bounds : Boolean := False;
+
+      --  Which outline each layer draws, whichever version said so.
+      function Layer_Glyph (Index : Natural) return Natural is
+        (if Layered
+         then Draws (Index + 1).Glyph_Index
+         else Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index).Glyph_Index);
    begin
       Tile := null;
       G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0);
@@ -1018,15 +1126,13 @@ package body Textrender is
          return False;
       end if;
 
-      --  The union of the layers' bounds. A layer with no outline (a space, or
-      --  an empty component) contributes nothing and is skipped.
+      --  The union of the layers' bounds. A layer with no outline contributes
+      --  nothing and is skipped.
       for Index in 0 .. Count - 1 loop
          declare
-            L : constant Textrender.Fonts.Colour_Layer :=
-              Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index);
             Info : Textrender.Fonts.Glyph_Info;
          begin
-            if Textrender.Fonts.Lookup_Glyph_By_Index (Font, L.Glyph_Index, Info)
+            if Textrender.Fonts.Lookup_Glyph_By_Index (Font, Layer_Glyph (Index), Info)
                  = Textrender.Fonts.Glyph_Found
               and then not Info.Is_Empty
             then
@@ -1051,7 +1157,6 @@ package body Textrender is
       end if;
 
       declare
-         --  Fitted to two cells by its own aspect, as the picture formats are.
          Box_W : constant Positive := Positive'Max (1, R.State.Cell_Width_V * 2);
          Box_H : constant Positive := Positive'Max (1, R.State.Cell_Height_V);
          Units : constant Float := Float (Textrender.Fonts.Units_Per_Em (Font));
@@ -1063,9 +1168,6 @@ package body Textrender is
            Positive'Max (1, Natural (Float'Floor (Span_W * Fit)));
          Dst_H  : constant Positive :=
            Positive'Max (1, Natural (Float'Floor (Span_H * Fit)));
-
-         --  Rasterize_Glyph scales by Pixel_Size against the em, so ask for the
-         --  size that makes the union box come out at the fitted height.
          Raster_Size : constant Positive :=
            Positive'Max (1, Natural (Float'Floor (Units * Fit)));
 
@@ -1078,8 +1180,14 @@ package body Textrender is
 
          for Index in 0 .. Count - 1 loop
             declare
-               L : constant Textrender.Fonts.Colour_Layer :=
-                 Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index);
+               Draw : constant Textrender.Fonts.Colour_Draw :=
+                 (if Layered then Draws (Index + 1) else Textrender.Fonts.Colour_Draw'(others => <>));
+               V0 : constant Textrender.Fonts.Colour_Layer :=
+                 (if Layered
+                  then Textrender.Fonts.Colour_Layer'(others => <>)
+                  else Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index));
+               This_Glyph : constant Natural :=
+                 (if Layered then Draw.Glyph_Index else V0.Glyph_Index);
             begin
                Textrender.Atlases.Clear (Scratch);
 
@@ -1087,7 +1195,7 @@ package body Textrender is
                  and then Textrender.Rasterizer.Rasterize_Glyph
                    (F           => Font,
                     A           => Scratch,
-                    Glyph_Index => L.Glyph_Index,
+                    Glyph_Index => This_Glyph,
                     Atlas_X     => 0,
                     Atlas_Y     => 0,
                     Glyph_W     => Dst_W,
@@ -1096,35 +1204,56 @@ package body Textrender is
                     Y_Min       => Y_Min,
                     X_Max       => X_Max,
                     Y_Max       => Y_Max,
-                    Pixel_Size  => Raster_Size)
+                    Pixel_Size  => Raster_Size,
+                    Transform   =>
+                      (if Layered
+                       then (XX => Draw.XX, XY => Draw.XY, YX => Draw.YX,
+                             YY => Draw.YY, DX => Draw.DX, DY => Draw.DY)
+                       else Textrender.Rasterizer.Identity_Transform))
                then
                   declare
                      Cover : constant access constant Alpha_Buffer :=
                        Textrender.Atlases.Pixels (Scratch);
                   begin
                      if Cover /= null then
-                        --  Source-over, straight alpha: this layer sits on top
-                        --  of whatever the earlier ones already drew.
                         for Row in 0 .. Dst_H - 1 loop
                            for Col in 0 .. Dst_W - 1 loop
                               declare
                                  At_Cover : constant Natural :=
                                    Row * Textrender.Atlases.Width (Scratch) + Col;
                                  At_Dst : constant Natural := (Row * Dst_W + Col) * 4;
-                                 Src_A  : Natural;
+
+                                 --  Where this pixel falls in font units, which
+                                 --  is the space a gradient is described in.
+                                 Unit_X : constant Float :=
+                                   Float (X_Min) + (Float (Col) + 0.5) * Span_W / Float (Dst_W);
+                                 Unit_Y : constant Float :=
+                                   Float (Y_Max) - (Float (Row) + 0.5) * Span_H / Float (Dst_H);
+
+                                 Src_R, Src_G, Src_B, Src_A : Natural;
                               begin
                                  exit when At_Cover > Cover'Last;
 
-                                 Src_A := Natural (Cover (At_Cover)) * L.Alpha / 255;
+                                 if Layered then
+                                    Fill_At (Draw.Fill, Unit_X, Unit_Y,
+                                             Src_R, Src_G, Src_B, Src_A);
+                                 else
+                                    Src_R := V0.Red;
+                                    Src_G := V0.Green;
+                                    Src_B := V0.Blue;
+                                    Src_A := V0.Alpha;
+                                 end if;
+
+                                 Src_A := Natural (Cover (At_Cover)) * Src_A / 255;
 
                                  if Src_A > 0 then
                                     for Channel in 0 .. 2 loop
                                        declare
                                           Colour : constant Natural :=
                                             (case Channel is
-                                               when 0 => L.Red,
-                                               when 1 => L.Green,
-                                               when others => L.Blue);
+                                               when 0 => Src_R,
+                                               when 1 => Src_G,
+                                               when others => Src_B);
                                           Under : constant Natural :=
                                             Natural (Tile (At_Dst + Channel));
                                        begin

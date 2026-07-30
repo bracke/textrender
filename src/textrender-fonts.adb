@@ -964,6 +964,427 @@ package body Textrender.Fonts is
          return Colour_Layer'(others => <>);
    end Colour_Layer_At;
 
+   function Colr_Version (F : Font) return Natural is
+     (if F.Colr_Table.Found and then Has_Bytes (F, F.Colr_Table.Offset, 2)
+      then U16 (F, F.Colr_Table.Offset)
+      else 0);
+
+   function Has_Colour_Paints (F : Font) return Boolean is
+   begin
+      return F.Colr_Table.Found
+        and then F.Cpal_Table.Found
+        and then F.Loca_Table.Found
+        and then F.Glyf_Table.Found
+        and then Colr_Version (F) >= 1
+        and then Has_Bytes (F, F.Colr_Table.Offset, 34);
+   end Has_Colour_Paints;
+
+   --  A 24-bit offset, which is what the paint tables use for their children.
+   function U24 (F : Font; Offset : Natural) return Natural is
+     (Byte_At (F, Offset) * 16#10000#
+      + Byte_At (F, Offset + 1) * 16#100#
+      + Byte_At (F, Offset + 2));
+
+   --  F2Dot14: a signed fixed-point fraction, used for scales and stop offsets.
+   function F2Dot14 (F : Font; Offset : Natural) return Float is
+     (Float (I16 (F, Offset)) / 16384.0);
+
+   --  F16Dot16, used by the affine transform entries.
+   function F16Dot16 (F : Font; Offset : Natural) return Float is
+      --  Read as two halves rather than through U32: a negative value has its
+      --  top bit set, and U32 answers a Natural, which cannot hold that.
+      High  : constant Natural := U16 (F, Offset);
+      Low   : constant Natural := U16 (F, Offset + 2);
+      Whole : constant Float :=
+        (if High >= 16#8000# then Float (High) - 65536.0 else Float (High));
+   begin
+      return Whole + Float (Low) / 65536.0;
+   end F16Dot16;
+
+   --  The colour a palette entry holds, with the paint's own alpha folded in.
+   procedure Palette_Colour
+     (F       : Font;
+      Index   : Natural;
+      Opacity : Float;
+      Red     : out Natural;
+      Green   : out Natural;
+      Blue    : out Natural;
+      Alpha   : out Natural);
+
+   procedure Palette_Colour
+     (F       : Font;
+      Index   : Natural;
+      Opacity : Float;
+      Red     : out Natural;
+      Green   : out Natural;
+      Blue    : out Natural;
+      Alpha   : out Natural)
+   is
+      Cpal        : constant Natural := F.Cpal_Table.Offset;
+      Num_Entries : Natural;
+      Records_Off : Natural;
+      At_Colour   : Natural;
+      Scale       : constant Float := Float'Max (0.0, Float'Min (1.0, Opacity));
+   begin
+      --  Opaque black is the fallback, and also what 0xFFFF (the text colour)
+      --  resolves to here: this layer does not know the caller's ink.
+      Red := 0;
+      Green := 0;
+      Blue := 0;
+      Alpha := Natural (255.0 * Scale);
+
+      if Index = 16#FFFF# or else not Has_Bytes (F, Cpal, 12) then
+         return;
+      end if;
+
+      Num_Entries := U16 (F, Cpal + 2);
+      Records_Off := Cpal + U32 (F, Cpal + 8);
+
+      if Index >= Num_Entries then
+         return;
+      end if;
+
+      At_Colour := Records_Off + Index * 4;
+
+      if not Has_Bytes (F, At_Colour, 4) then
+         return;
+      end if;
+
+      --  CPAL records are blue first.
+      Blue  := Byte_At (F, At_Colour);
+      Green := Byte_At (F, At_Colour + 1);
+      Red   := Byte_At (F, At_Colour + 2);
+      Alpha := Natural (Float (Byte_At (F, At_Colour + 3)) * Scale);
+   end Palette_Colour;
+
+   --  A ColorLine: an extend mode, then a run of stops.
+   --
+   --  Only the pad extend is honoured, which is every gradient in the fonts this
+   --  was built against; repeat and reflect fall back to pad rather than being
+   --  refused, so such a gradient is flat at its ends instead of absent.
+   procedure Read_Colour_Line
+     (F      : Font;
+      Offset : Natural;
+      Fill   : in out Paint_Fill);
+
+   procedure Read_Colour_Line
+     (F      : Font;
+      Offset : Natural;
+      Fill   : in out Paint_Fill)
+   is
+      Count : Natural;
+   begin
+      Fill.Stop_Count := 0;
+
+      if not Has_Bytes (F, Offset, 3) then
+         return;
+      end if;
+
+      Count := Natural'Min (U16 (F, Offset + 1), Max_Colour_Stops);
+
+      for Index in 1 .. Count loop
+         declare
+            At_Stop : constant Natural := Offset + 3 + (Index - 1) * 6;
+            Stop    : Colour_Stop;
+         begin
+            exit when not Has_Bytes (F, At_Stop, 6);
+
+            Stop.Position := F2Dot14 (F, At_Stop);
+            Palette_Colour
+              (F, U16 (F, At_Stop + 2), F2Dot14 (F, At_Stop + 4),
+               Stop.Red, Stop.Green, Stop.Blue, Stop.Alpha);
+
+            Fill.Stops (Index) := Stop;
+            Fill.Stop_Count := Index;
+         end;
+      end loop;
+   end Read_Colour_Line;
+
+   --  Where a version 1 base glyph's paint tree starts. The records are sorted
+   --  by glyph id, so this is a binary search like the version 0 one.
+   procedure Find_Base_Paint
+     (F           : Font;
+      Glyph_Index : Natural;
+      Found       : out Boolean;
+      Paint       : out Natural);
+
+   procedure Find_Base_Paint
+     (F           : Font;
+      Glyph_Index : Natural;
+      Found       : out Boolean;
+      Paint       : out Natural)
+   is
+      Colr      : constant Natural := F.Colr_Table.Offset;
+      Base_List : Natural;
+      Num       : Natural;
+      Low, High : Integer;
+   begin
+      Found := False;
+      Paint := 0;
+
+      if not Has_Colour_Paints (F) then
+         return;
+      end if;
+
+      Base_List := Colr + U32 (F, Colr + 14);
+
+      if not Has_Bytes (F, Base_List, 4) then
+         return;
+      end if;
+
+      Num := U32 (F, Base_List);
+      Low := 0;
+      High := Num - 1;
+
+      while Low <= High loop
+         declare
+            Middle : constant Natural := Natural ((Low + High) / 2);
+            At_Rec : constant Natural := Base_List + 4 + Middle * 6;
+            Gid    : Natural;
+         begin
+            exit when not Has_Bytes (F, At_Rec, 6);
+
+            Gid := U16 (F, At_Rec);
+
+            if Gid = Glyph_Index then
+               Paint := Base_List + U32 (F, At_Rec + 2);
+               Found := Has_Bytes (F, Paint, 1);
+               return;
+            elsif Gid < Glyph_Index then
+               Low := Middle + 1;
+            else
+               High := Middle - 1;
+            end if;
+         end;
+      end loop;
+   end Find_Base_Paint;
+
+   function Has_Paint_Graph
+     (F           : Font;
+      Glyph_Index : Natural)
+      return Boolean
+   is
+      Found : Boolean;
+      Paint : Natural;
+   begin
+      Find_Base_Paint (F, Glyph_Index, Found, Paint);
+      return Found;
+   exception
+      when others =>
+         return False;
+   end Has_Paint_Graph;
+
+   Max_Paint_Depth : constant := 24;
+
+   function Colour_Draws_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Draws       : out Colour_Draw_Array;
+      Count       : out Natural)
+      return Boolean
+   is
+      Colr       : constant Natural := F.Colr_Table.Offset;
+      Layer_List : Natural;
+      Total      : Natural := 0;
+
+      --  Walks the tree, carrying the transform in force and the glyph the
+      --  nearest enclosing PaintGlyph named. A fill only becomes a draw when
+      --  both are known.
+      procedure Walk
+        (Paint : Natural;
+         XX, XY, YX, YY, DX, DY : Float;
+         Glyph : Natural;
+         Depth : Natural);
+
+      procedure Emit
+        (Glyph : Natural;
+         XX, XY, YX, YY, DX, DY : Float;
+         Fill  : Paint_Fill) is
+      begin
+         if Total >= Max_Colour_Draws or else Glyph = 0 then
+            return;
+         end if;
+
+         Total := Total + 1;
+         Draws (Total) :=
+           (Glyph_Index => Glyph,
+            XX => XX, XY => XY, YX => YX, YY => YY, DX => DX, DY => DY,
+            Fill => Fill);
+      end Emit;
+
+      procedure Walk
+        (Paint : Natural;
+         XX, XY, YX, YY, DX, DY : Float;
+         Glyph : Natural;
+         Depth : Natural)
+      is
+         Format : Natural;
+      begin
+         if Depth > Max_Paint_Depth
+           or else Total >= Max_Colour_Draws
+           or else not Has_Bytes (F, Paint, 1)
+         then
+            return;
+         end if;
+
+         Format := Byte_At (F, Paint);
+
+         case Format is
+            when 1 =>
+               --  PaintColrLayers: a run of paints in the layer list.
+               declare
+                  Num   : constant Natural := Byte_At (F, Paint + 1);
+                  First : constant Natural := U32 (F, Paint + 2);
+               begin
+                  for Index in 0 .. Num - 1 loop
+                     exit when Total >= Max_Colour_Draws;
+                     exit when not Has_Bytes (F, Layer_List + 4 + (First + Index) * 4, 4);
+                     Walk (Layer_List + U32 (F, Layer_List + 4 + (First + Index) * 4),
+                           XX, XY, YX, YY, DX, DY, Glyph, Depth + 1);
+                  end loop;
+               end;
+
+            when 2 | 3 =>
+               --  PaintSolid, and its variable form read as its default.
+               declare
+                  Fill : Paint_Fill;
+               begin
+                  Palette_Colour
+                    (F, U16 (F, Paint + 1), F2Dot14 (F, Paint + 3),
+                     Fill.Red, Fill.Green, Fill.Blue, Fill.Alpha);
+                  Emit (Glyph, XX, XY, YX, YY, DX, DY, Fill);
+               end;
+
+            when 4 | 5 =>
+               declare
+                  Fill : Paint_Fill;
+               begin
+                  Fill.Kind := Linear_Gradient;
+                  Read_Colour_Line (F, Paint + U24 (F, Paint + 1), Fill);
+                  Fill.X0 := Float (I16 (F, Paint + 4));
+                  Fill.Y0 := Float (I16 (F, Paint + 6));
+                  Fill.X1 := Float (I16 (F, Paint + 8));
+                  Fill.Y1 := Float (I16 (F, Paint + 10));
+                  Fill.X2 := Float (I16 (F, Paint + 12));
+                  Fill.Y2 := Float (I16 (F, Paint + 14));
+                  Emit (Glyph, XX, XY, YX, YY, DX, DY, Fill);
+               end;
+
+            when 6 | 7 =>
+               declare
+                  Fill : Paint_Fill;
+               begin
+                  Fill.Kind := Radial_Gradient;
+                  Read_Colour_Line (F, Paint + U24 (F, Paint + 1), Fill);
+                  Fill.X0 := Float (I16 (F, Paint + 4));
+                  Fill.Y0 := Float (I16 (F, Paint + 6));
+                  Fill.Radius_0 := Float (U16 (F, Paint + 8));
+                  Fill.X1 := Float (I16 (F, Paint + 10));
+                  Fill.Y1 := Float (I16 (F, Paint + 12));
+                  Fill.Radius_1 := Float (U16 (F, Paint + 14));
+                  Emit (Glyph, XX, XY, YX, YY, DX, DY, Fill);
+               end;
+
+            when 10 =>
+               --  PaintGlyph: names the outline its child paint fills.
+               Walk (Paint + U24 (F, Paint + 1),
+                     XX, XY, YX, YY, DX, DY, U16 (F, Paint + 4), Depth + 1);
+
+            when 11 =>
+               --  PaintColrGlyph: another base glyph's paint, reused.
+               declare
+                  Other : constant Natural := U16 (F, Paint + 1);
+                  Found : Boolean;
+                  At_Paint : Natural;
+               begin
+                  Find_Base_Paint (F, Other, Found, At_Paint);
+
+                  if Found then
+                     Walk (At_Paint, XX, XY, YX, YY, DX, DY, Glyph, Depth + 1);
+                  end if;
+               end;
+
+            when 12 | 13 =>
+               --  PaintTransform: an affine, composed with what is in force.
+               declare
+                  Child : constant Natural := Paint + U24 (F, Paint + 1);
+                  At_Aff : constant Natural := Paint + U24 (F, Paint + 4);
+                  A : constant Float := F16Dot16 (F, At_Aff);
+                  B : constant Float := F16Dot16 (F, At_Aff + 4);
+                  C : constant Float := F16Dot16 (F, At_Aff + 8);
+                  D : constant Float := F16Dot16 (F, At_Aff + 12);
+                  E : constant Float := F16Dot16 (F, At_Aff + 16);
+                  G : constant Float := F16Dot16 (F, At_Aff + 20);
+               begin
+                  Walk (Child,
+                        XX * A + XY * B, XX * C + XY * D,
+                        YX * A + YY * B, YX * C + YY * D,
+                        DX + XX * E + XY * G, DY + YX * E + YY * G,
+                        Glyph, Depth + 1);
+               end;
+
+            when 14 | 15 =>
+               declare
+                  Child : constant Natural := Paint + U24 (F, Paint + 1);
+                  Tx : constant Float := Float (I16 (F, Paint + 4));
+                  Ty : constant Float := Float (I16 (F, Paint + 6));
+               begin
+                  Walk (Child, XX, XY, YX, YY,
+                        DX + XX * Tx + XY * Ty, DY + YX * Tx + YY * Ty,
+                        Glyph, Depth + 1);
+               end;
+
+            when 16 | 17 =>
+               declare
+                  Child : constant Natural := Paint + U24 (F, Paint + 1);
+                  Sx : constant Float := F2Dot14 (F, Paint + 4);
+                  Sy : constant Float := F2Dot14 (F, Paint + 6);
+               begin
+                  Walk (Child, XX * Sx, XY * Sy, YX * Sx, YY * Sy, DX, DY,
+                        Glyph, Depth + 1);
+               end;
+
+            when 32 =>
+               --  PaintComposite. The blend modes are not implemented; both
+               --  sides are drawn in order instead, which for the common
+               --  source-over case is exactly right and for the clipping modes
+               --  shows too much rather than nothing.
+               Walk (Paint + U24 (F, Paint + 5), XX, XY, YX, YY, DX, DY, Glyph, Depth + 1);
+               Walk (Paint + U24 (F, Paint + 1), XX, XY, YX, YY, DX, DY, Glyph, Depth + 1);
+
+            when others =>
+               --  Sweep gradients and the variable-only formats: not drawn.
+               null;
+         end case;
+      end Walk;
+
+      Found    : Boolean;
+      At_Paint : Natural;
+   begin
+      Draws := [others => <>];
+      Count := 0;
+
+      if not Has_Colour_Paints (F) then
+         return False;
+      end if;
+
+      Layer_List := Colr + U32 (F, Colr + 18);
+
+      Find_Base_Paint (F, Glyph_Index, Found, At_Paint);
+
+      if not Found then
+         return False;
+      end if;
+
+      Walk (At_Paint, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0, 0);
+      Count := Total;
+      return Count > 0;
+   exception
+      when others =>
+         Count := 0;
+         return False;
+   end Colour_Draws_For;
+
    function Is_Bitmap_Only (F : Font) return Boolean is
    begin
       return Has_Colour_Bitmaps (F)

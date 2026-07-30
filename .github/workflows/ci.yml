@@ -55,15 +55,19 @@ jobs:
         shell: bash
         run: alr settings --global --set solver.timeout 600
 
-      # A COLR/CPAL font, which no runner ships and no distribution installs by
-      # default. Twemoji is the freely available one; Segoe UI Emoji is what this
-      # support is actually for, and only a Windows runner has that.
-      - name: Fetch a layered colour font for the tests
+      # COLR fonts, which no runner ships and no distribution installs by
+      # default: Twemoji for version 0, Noto's COLRv1 build for version 1. Segoe
+      # UI Emoji is what this support is actually for, and only a Windows runner
+      # has that.
+      - name: Fetch layered colour fonts for the tests
         shell: bash
         run: |
           curl -sL --retry 3 -o "$RUNNER_TEMP/TwemojiMozilla.ttf" \
             https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/Twemoji.Mozilla.ttf
           echo "TEXTRENDER_COLR_FONT=$RUNNER_TEMP/TwemojiMozilla.ttf" >> "$GITHUB_ENV"
+          curl -sL --retry 3 -o "$RUNNER_TEMP/Noto-COLRv1.ttf" \
+            https://github.com/googlefonts/noto-emoji/raw/main/fonts/Noto-COLRv1.ttf
+          echo "TEXTRENDER_COLRV1_FONT=$RUNNER_TEMP/Noto-COLRv1.ttf" >> "$GITHUB_ENV"
 
       - name: Build the library
         shell: bash

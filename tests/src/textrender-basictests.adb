@@ -94,6 +94,7 @@ package body Textrender.BasicTests is
    --  as a defect in the parser.
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Layered_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class);
+   procedure Test_Paint_Graph_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Host_Colour_Font_Has_Pictures (T : in out AUnit.Test_Cases.Test_Case'Class);
 
    --  Whichever colour font the host ships, find a picture in it.
@@ -168,6 +169,101 @@ package body Textrender.BasicTests is
    --  UI Emoji is the font this matters for on Windows, and no runner here has
    --  it. Skipped when the fixture is absent, since it is not installed by
    --  default anywhere.
+   --  A COLR version 1 glyph: a paint graph rather than a flat layer list.
+   --
+   --  Worth its own test because a v1 font's v0 section is normally EMPTY, so a
+   --  reader that only understands v0 draws nothing at all for it -- the failure
+   --  is silence, not a wrong colour. Noto's v1 build is the fixture: 3993 base
+   --  glyphs whose paints are mostly solid fills, with a few thousand linear and
+   --  radial gradients and transforms among them.
+   procedure Test_Paint_Graph_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      function Paint_Font_Path return String is
+      begin
+         if Ada.Environment_Variables.Exists ("TEXTRENDER_COLRV1_FONT")
+           and then Ada.Directories.Exists
+             (Ada.Environment_Variables.Value ("TEXTRENDER_COLRV1_FONT"))
+         then
+            return Ada.Environment_Variables.Value ("TEXTRENDER_COLRV1_FONT");
+         else
+            return "";
+         end if;
+      end Paint_Font_Path;
+
+      Paint_Font : constant String := Paint_Font_Path;
+      R : Textrender.Renderer;
+      G : Textrender.Colour_Glyph;
+
+      --  U+1F308 RAINBOW, which is a gradient if anything is.
+      Rainbow : constant Textrender.Codepoint := 16#1F308#;
+   begin
+      if Paint_Font = "" or else Font_Path = "" then
+         return;
+      end if;
+
+      Assert
+        (Textrender.Load_Font
+           (R, Path => Font_Path, Pixel_Size => 16,
+            Cell_Width => 8, Cell_Height => 20,
+            Atlas_Width => 512, Atlas_Height => 512) = Textrender.Success,
+         "the text font loads");
+      Assert (Textrender.Add_Fallback_Font (R, Paint_Font) = Textrender.Success,
+              "and a paint-graph colour font joins the chain");
+
+      Assert (Textrender.Has_Colour_Glyph (R, Rainbow),
+              "the paint graph is found with no decoder installed");
+      Assert (Textrender.Get_Colour_Glyph (R, Rainbow, G) = Textrender.Success,
+              "and paints");
+      Assert (G.Width > 0 and then G.Height > 0, "at a real size");
+
+      declare
+         Pixels : constant access constant Textrender.Rgba_Buffer :=
+           Textrender.Colour_Glyph_Pixels (R, Rainbow);
+         Opaque : Natural := 0;
+         Distinct_Hues : Natural := 0;
+         Seen_R : array (0 .. 7) of Boolean := [others => False];
+      begin
+         Assert (Pixels /= null, "with pixels behind it");
+
+         for Pixel in 0 .. G.Width * G.Height - 1 loop
+            declare
+               Red   : constant Natural := Natural (Pixels (Pixel * 4));
+               Green : constant Natural := Natural (Pixels (Pixel * 4 + 1));
+               Blue  : constant Natural := Natural (Pixels (Pixel * 4 + 2));
+               A     : constant Natural := Natural (Pixels (Pixel * 4 + 3));
+            begin
+               if A > 128 then
+                  Opaque := Opaque + 1;
+
+                  if abs (Red - Green) > 30 or else abs (Green - Blue) > 30 then
+                     Seen_R (Red / 32) := True;
+                  end if;
+               end if;
+            end;
+         end loop;
+
+         for Bucket of Seen_R loop
+            if Bucket then
+               Distinct_Hues := Distinct_Hues + 1;
+            end if;
+         end loop;
+
+         Assert (Opaque > (G.Width * G.Height) / 20,
+                 "something was painted, got" & Natural'Image (Opaque)
+                 & " opaque of" & Natural'Image (G.Width * G.Height));
+
+         --  A rainbow is several colours. One would mean the paint graph
+         --  collapsed to a single fill, which is the plausible way to get this
+         --  wrong and still draw something.
+         Assert (Distinct_Hues >= 2,
+                 "and in more than one colour, got" & Natural'Image (Distinct_Hues)
+                 & " bands");
+      end;
+
+      Textrender.Reset (R);
+   end Test_Paint_Graph_Colour_Glyph;
+
    procedure Test_Layered_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
 
@@ -1613,6 +1709,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Layered_Colour_Glyph'Access,
          "a COLR/CPAL glyph is composited from its layers, in colour");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Paint_Graph_Colour_Glyph'Access,
+         "a COLR v1 paint graph draws, gradients and all");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

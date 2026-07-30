@@ -146,6 +146,85 @@ package Textrender.Fonts is
       Layer       : Natural)
       return Colour_Layer;
 
+   --  COLR version 1: a paint graph rather than a flat layer list.
+   --
+   --  Version 0 is a run of (glyph, palette colour) pairs. Version 1 replaces
+   --  that with a tree of paint nodes -- layers, transforms, and fills that may
+   --  be gradients -- and a version 1 font's version 0 section is usually EMPTY,
+   --  so reading only v0 draws nothing at all rather than something plainer.
+   --
+   --  Walking that tree is this crate's job; what comes out is a flat list of
+   --  "draw this glyph, through this transform, with this fill", which is all a
+   --  rasterizer needs.
+
+   type Gradient_Kind is (Solid_Fill, Linear_Gradient, Radial_Gradient);
+
+   type Colour_Stop is record
+      Position : Float   := 0.0;
+      Red      : Natural := 0;
+      Green    : Natural := 0;
+      Blue     : Natural := 0;
+      Alpha    : Natural := 255;
+   end record;
+
+   Max_Colour_Stops : constant := 16;
+   type Colour_Stop_Array is array (1 .. Max_Colour_Stops) of Colour_Stop;
+
+   type Paint_Fill is record
+      Kind : Gradient_Kind := Solid_Fill;
+
+      --  Solid_Fill only.
+      Red   : Natural := 0;
+      Green : Natural := 0;
+      Blue  : Natural := 0;
+      Alpha : Natural := 255;
+
+      --  Gradients. Points are in font units, before the draw's transform.
+      Stops      : Colour_Stop_Array;
+      Stop_Count : Natural := 0;
+      X0, Y0     : Float := 0.0;
+      X1, Y1     : Float := 0.0;
+      X2, Y2     : Float := 0.0;
+      Radius_0   : Float := 0.0;
+      Radius_1   : Float := 0.0;
+   end record;
+
+   --  One glyph to draw, with the transform in force where it appeared.
+   type Colour_Draw is record
+      Glyph_Index : Natural := 0;
+      XX          : Float := 1.0;
+      XY          : Float := 0.0;
+      YX          : Float := 0.0;
+      YY          : Float := 1.0;
+      DX          : Float := 0.0;
+      DY          : Float := 0.0;
+      Fill        : Paint_Fill;
+   end record;
+
+   Max_Colour_Draws : constant := 128;
+   type Colour_Draw_Array is array (1 .. Max_Colour_Draws) of Colour_Draw;
+
+   --  Does this font use the version 1 paint graph?
+   function Has_Colour_Paints (F : Font) return Boolean;
+
+   --  Has this particular glyph got a version 1 paint tree?
+   function Has_Paint_Graph
+     (F           : Font;
+      Glyph_Index : Natural)
+      return Boolean;
+
+   --  Flatten this glyph's paint graph into drawing operations, in paint order.
+   --
+   --  False when the glyph has no version 1 paint. Count is clamped to
+   --  Max_Colour_Draws; a glyph needing more is drawn as far as it goes, which
+   --  is better than not at all.
+   function Colour_Draws_For
+     (F           : Font;
+      Glyph_Index : Natural;
+      Draws       : out Colour_Draw_Array;
+      Count       : out Natural)
+      return Boolean;
+
    --  Has this font got no outlines -- only colour bitmaps?
    --
    --  Noto Color Emoji is exactly this: no glyf, no loca, nothing to rasterize.
