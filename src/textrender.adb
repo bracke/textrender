@@ -906,21 +906,261 @@ package body Textrender is
       end;
    end Find_Colour_Source;
 
+   --  The font in the chain that builds this codepoint out of layers, if any.
+   --  Searched like the picture formats: primary first, then each fallback.
+   procedure Find_Layer_Source
+     (R            : Renderer;
+      C            : Codepoint;
+      Found        : out Boolean;
+      Glyph_Index  : out Natural;
+      Source_Index : out Natural);
+
    function Has_Colour_Glyph (R : Renderer; C : Codepoint) return Boolean is
       Found  : Boolean;
       Bitmap : Textrender.Fonts.Colour_Bitmap;
       Source : Natural;
+      Glyph  : Natural;
    begin
-      if R.State = null
-        or else R.State.Extent_Reader = null
-        or else R.State.Decoder = null
-      then
+      if R.State = null then
+         return False;
+      end if;
+
+      --  Layered glyphs come first because they need nothing installed: they are
+      --  outlines and a palette, both of which this crate can already read. The
+      --  picture formats need the caller's decoder, so they are only offered
+      --  once there is one.
+      Find_Layer_Source (R, C, Found, Glyph, Source);
+
+      if Found then
+         return True;
+      end if;
+
+      if R.State.Extent_Reader = null or else R.State.Decoder = null then
          return False;
       end if;
 
       Find_Colour_Source (R, C, Found, Bitmap, Source);
       return Found;
    end Has_Colour_Glyph;
+
+   procedure Find_Layer_Source
+     (R            : Renderer;
+      C            : Codepoint;
+      Found        : out Boolean;
+      Glyph_Index  : out Natural;
+      Source_Index : out Natural)
+   is
+      procedure Try (F : Textrender.Fonts.Font; Which : Natural) is
+         Index : Natural := 0;
+      begin
+         if Found or else not Textrender.Fonts.Has_Colour_Layers (F) then
+            return;
+         end if;
+
+         if not Textrender.Fonts.Glyph_Index_Of (F, C, Index) then
+            return;
+         end if;
+
+         if Textrender.Fonts.Colour_Layer_Count (F, Index) > 0 then
+            Found := True;
+            Glyph_Index := Index;
+            Source_Index := Which;
+         end if;
+      end Try;
+   begin
+      Found := False;
+      Glyph_Index := 0;
+      Source_Index := 0;
+
+      if R.State = null then
+         return;
+      end if;
+
+      Try (R.State.Font, 0);
+
+      declare
+         Which : Natural := 0;
+      begin
+         for F of R.State.Fallbacks loop
+            exit when Found;
+            Which := Which + 1;
+            Try (F, Which);
+         end loop;
+      end;
+   end Find_Layer_Source;
+
+   --  Draw a layered colour glyph into its own tile.
+   --
+   --  Each layer is an ordinary outline, so the existing rasterizer draws it;
+   --  what this adds is doing that once per layer into a scratch coverage
+   --  buffer, tinting by the layer's palette colour, and compositing the results
+   --  in order. No decoder is involved -- there is no picture to decode.
+   --
+   --  Every layer is rasterized against the union of all their bounds, so they
+   --  share one coordinate space and line up as the font intended.
+   function Build_Layered_Tile
+     (R     : in out Renderer;
+      Font  : Textrender.Fonts.Font;
+      Glyph : Natural;
+      Tile  : out Rgba_Buffer_Access;
+      G     : out Colour_Glyph)
+      return Boolean
+   is
+      Count : constant Natural := Textrender.Fonts.Colour_Layer_Count (Font, Glyph);
+
+      X_Min, Y_Min, X_Max, Y_Max : Integer := 0;
+      Have_Bounds : Boolean := False;
+   begin
+      Tile := null;
+      G := (Width => 0, Height => 0, Advance_X => 0.0, Bearing_Y => 0.0);
+
+      if Count = 0 then
+         return False;
+      end if;
+
+      --  The union of the layers' bounds. A layer with no outline (a space, or
+      --  an empty component) contributes nothing and is skipped.
+      for Index in 0 .. Count - 1 loop
+         declare
+            L : constant Textrender.Fonts.Colour_Layer :=
+              Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index);
+            Info : Textrender.Fonts.Glyph_Info;
+         begin
+            if Textrender.Fonts.Lookup_Glyph_By_Index (Font, L.Glyph_Index, Info)
+                 = Textrender.Fonts.Glyph_Found
+              and then not Info.Is_Empty
+            then
+               if not Have_Bounds then
+                  X_Min := Info.Bounds.X_Min;
+                  Y_Min := Info.Bounds.Y_Min;
+                  X_Max := Info.Bounds.X_Max;
+                  Y_Max := Info.Bounds.Y_Max;
+                  Have_Bounds := True;
+               else
+                  X_Min := Integer'Min (X_Min, Info.Bounds.X_Min);
+                  Y_Min := Integer'Min (Y_Min, Info.Bounds.Y_Min);
+                  X_Max := Integer'Max (X_Max, Info.Bounds.X_Max);
+                  Y_Max := Integer'Max (Y_Max, Info.Bounds.Y_Max);
+               end if;
+            end if;
+         end;
+      end loop;
+
+      if not Have_Bounds or else X_Max <= X_Min or else Y_Max <= Y_Min then
+         return False;
+      end if;
+
+      declare
+         --  Fitted to two cells by its own aspect, as the picture formats are.
+         Box_W : constant Positive := Positive'Max (1, R.State.Cell_Width_V * 2);
+         Box_H : constant Positive := Positive'Max (1, R.State.Cell_Height_V);
+         Units : constant Float := Float (Textrender.Fonts.Units_Per_Em (Font));
+         Span_W : constant Float := Float (X_Max - X_Min);
+         Span_H : constant Float := Float (Y_Max - Y_Min);
+         Fit    : constant Float :=
+           Float'Min (Float (Box_W) / Span_W, Float (Box_H) / Span_H);
+         Dst_W  : constant Positive :=
+           Positive'Max (1, Natural (Float'Floor (Span_W * Fit)));
+         Dst_H  : constant Positive :=
+           Positive'Max (1, Natural (Float'Floor (Span_H * Fit)));
+
+         --  Rasterize_Glyph scales by Pixel_Size against the em, so ask for the
+         --  size that makes the union box come out at the fitted height.
+         Raster_Size : constant Positive :=
+           Positive'Max (1, Natural (Float'Floor (Units * Fit)));
+
+         Scratch : Textrender.Atlases.Atlas;
+         Pack_X, Pack_Y : Natural;
+      begin
+         Textrender.Atlases.Init (Scratch, Dst_W, Dst_H);
+         Tile := new Rgba_Buffer (0 .. Dst_W * Dst_H * 4 - 1);
+         Tile.all := [others => 0];
+
+         for Index in 0 .. Count - 1 loop
+            declare
+               L : constant Textrender.Fonts.Colour_Layer :=
+                 Textrender.Fonts.Colour_Layer_At (Font, Glyph, Index);
+            begin
+               Textrender.Atlases.Clear (Scratch);
+
+               if Textrender.Atlases.Allocate_Rect (Scratch, Dst_W, Dst_H, Pack_X, Pack_Y)
+                 and then Textrender.Rasterizer.Rasterize_Glyph
+                   (F           => Font,
+                    A           => Scratch,
+                    Glyph_Index => L.Glyph_Index,
+                    Atlas_X     => 0,
+                    Atlas_Y     => 0,
+                    Glyph_W     => Dst_W,
+                    Glyph_H     => Dst_H,
+                    X_Min       => X_Min,
+                    Y_Min       => Y_Min,
+                    X_Max       => X_Max,
+                    Y_Max       => Y_Max,
+                    Pixel_Size  => Raster_Size)
+               then
+                  declare
+                     Cover : constant access constant Alpha_Buffer :=
+                       Textrender.Atlases.Pixels (Scratch);
+                  begin
+                     if Cover /= null then
+                        --  Source-over, straight alpha: this layer sits on top
+                        --  of whatever the earlier ones already drew.
+                        for Row in 0 .. Dst_H - 1 loop
+                           for Col in 0 .. Dst_W - 1 loop
+                              declare
+                                 At_Cover : constant Natural :=
+                                   Row * Textrender.Atlases.Width (Scratch) + Col;
+                                 At_Dst : constant Natural := (Row * Dst_W + Col) * 4;
+                                 Src_A  : Natural;
+                              begin
+                                 exit when At_Cover > Cover'Last;
+
+                                 Src_A := Natural (Cover (At_Cover)) * L.Alpha / 255;
+
+                                 if Src_A > 0 then
+                                    for Channel in 0 .. 2 loop
+                                       declare
+                                          Colour : constant Natural :=
+                                            (case Channel is
+                                               when 0 => L.Red,
+                                               when 1 => L.Green,
+                                               when others => L.Blue);
+                                          Under : constant Natural :=
+                                            Natural (Tile (At_Dst + Channel));
+                                       begin
+                                          Tile (At_Dst + Channel) :=
+                                            Alpha ((Colour * Src_A + Under * (255 - Src_A)) / 255);
+                                       end;
+                                    end loop;
+
+                                    declare
+                                       Under : constant Natural := Natural (Tile (At_Dst + 3));
+                                    begin
+                                       Tile (At_Dst + 3) :=
+                                         Alpha (Src_A + Under * (255 - Src_A) / 255);
+                                    end;
+                                 end if;
+                              end;
+                           end loop;
+                        end loop;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         Textrender.Atlases.Reset (Scratch);
+
+         G :=
+           (Width => Dst_W, Height => Dst_H,
+            Advance_X => Float (Box_W),
+            Bearing_Y => Ascent (R) - Float ((R.State.Cell_Height_V - Dst_H) / 2));
+         return True;
+      end;
+   exception
+      when others =>
+         return False;
+   end Build_Layered_Tile;
 
    function Get_Colour_Glyph
      (R : in out Renderer;
@@ -938,13 +1178,41 @@ package body Textrender is
          return Font_Not_Loaded;
       end if;
 
-      if R.State.Extent_Reader = null or else R.State.Decoder = null then
-         return Glyph_Missing;
-      end if;
-
       if R.State.Colour_Cache.Contains (C) then
          G := R.State.Colour_Cache.Element (C).Glyph;
          return Success;
+      end if;
+
+      --  A layered glyph is drawn rather than decoded, so it is tried before the
+      --  decoder is required at all.
+      declare
+         Layered : Boolean;
+         Layer_Glyph : Natural;
+         Layer_Source : Natural;
+      begin
+         Find_Layer_Source (R, C, Layered, Layer_Glyph, Layer_Source);
+
+         if Layered then
+            declare
+               Tile : Rgba_Buffer_Access;
+            begin
+               if Build_Layered_Tile
+                    (R,
+                     (if Layer_Source = 0
+                      then R.State.Font
+                      else R.State.Fallbacks (Layer_Source)),
+                     Layer_Glyph, Tile, G)
+                 and then Tile /= null
+               then
+                  R.State.Colour_Cache.Insert (C, (Glyph => G, Pixels => Tile));
+                  return Success;
+               end if;
+            end;
+         end if;
+      end;
+
+      if R.State.Extent_Reader = null or else R.State.Decoder = null then
+         return Glyph_Missing;
       end if;
 
       Find_Colour_Source (R, C, Found, Bitmap, Source);

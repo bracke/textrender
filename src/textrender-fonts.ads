@@ -113,6 +113,39 @@ package Textrender.Fonts is
    --  Does this font carry colour bitmaps at all?
    function Has_Colour_Bitmaps (F : Font) return Boolean;
 
+   --  A single layer of a layered colour glyph: which glyph to draw, and the
+   --  colour to draw it in.
+   type Colour_Layer is record
+      Glyph_Index : Natural := 0;
+      Red         : Natural := 0;
+      Green       : Natural := 0;
+      Blue        : Natural := 0;
+      Alpha       : Natural := 255;
+   end record;
+
+   --  Does this font build its colour glyphs out of layers rather than pictures?
+   --
+   --  This is COLR/CPAL, which is what Segoe UI Emoji and Twemoji use: a glyph
+   --  is a stack of ordinary outlines, each drawn in a colour from a palette.
+   --  Nothing here needs decoding -- the layers are outlines this crate already
+   --  rasterizes -- so unlike the picture formats it works with no decoder
+   --  installed.
+   function Has_Colour_Layers (F : Font) return Boolean;
+
+   --  How many layers this glyph is built from; zero when it has none, which is
+   --  normal, since only the emoji in such a font are layered.
+   function Colour_Layer_Count
+     (F           : Font;
+      Glyph_Index : Natural)
+      return Natural;
+
+   --  One layer of a layered glyph, counted from zero.
+   function Colour_Layer_At
+     (F           : Font;
+      Glyph_Index : Natural;
+      Layer       : Natural)
+      return Colour_Layer;
+
    --  Has this font got no outlines -- only colour bitmaps?
    --
    --  Noto Color Emoji is exactly this: no glyf, no loca, nothing to rasterize.
@@ -189,6 +222,8 @@ private
       Cblc_Table : Table_Info;
       Cbdt_Table : Table_Info;
       Sbix_Table : Table_Info;
+      Colr_Table : Table_Info;
+      Cpal_Table : Table_Info;
 
       Units_Per_Em_V        : Positive := 1;
       Index_To_Loc_Format_V : Integer := 0;

@@ -1,6 +1,7 @@
 with AUnit.Assertions;
 
 with Ada.Directories;
+with Ada.Environment_Variables;
 
 with Textrender.Fonts;
 
@@ -92,6 +93,7 @@ package body Textrender.BasicTests is
    --  follows loads this font, and each of them would report a missing fixture
    --  as a defect in the parser.
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class);
+   procedure Test_Layered_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Host_Colour_Font_Has_Pictures (T : in out AUnit.Test_Cases.Test_Case'Class);
 
    --  Whichever colour font the host ships, find a picture in it.
@@ -154,6 +156,107 @@ package body Textrender.BasicTests is
          Assert (True, "no colour font on this host");
       end if;
    end Test_Host_Colour_Font_Has_Pictures;
+
+   --  A layered colour glyph, drawn rather than decoded.
+   --
+   --  COLR/CPAL is the other way a font carries colour: instead of a picture per
+   --  glyph, an emoji is a stack of ordinary outlines each painted from a
+   --  palette. That means no decoder is involved at all, which this checks by
+   --  installing none.
+   --
+   --  Twemoji is the fixture because it is COLR v0 and freely available; Segoe
+   --  UI Emoji is the font this matters for on Windows, and no runner here has
+   --  it. Skipped when the fixture is absent, since it is not installed by
+   --  default anywhere.
+   procedure Test_Layered_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      --  Named by the environment so CI can put it where it likes, with the
+      --  places a system package would install it as a fallback.
+      function Layered_Font_Path return String is
+      begin
+         if Ada.Environment_Variables.Exists ("TEXTRENDER_COLR_FONT")
+           and then Ada.Directories.Exists
+             (Ada.Environment_Variables.Value ("TEXTRENDER_COLR_FONT"))
+         then
+            return Ada.Environment_Variables.Value ("TEXTRENDER_COLR_FONT");
+         elsif Ada.Directories.Exists
+           ("/usr/share/fonts/truetype/twemoji/TwemojiMozilla.ttf")
+         then
+            return "/usr/share/fonts/truetype/twemoji/TwemojiMozilla.ttf";
+         else
+            return "";
+         end if;
+      end Layered_Font_Path;
+
+      Twemoji : constant String := Layered_Font_Path;
+      R : Textrender.Renderer;
+      G : Textrender.Colour_Glyph;
+
+      --  U+1F389 PARTY POPPER: several layers in several colours.
+      Party : constant Textrender.Codepoint := 16#1F389#;
+   begin
+      if Twemoji = "" or else Font_Path = "" then
+         return;
+      end if;
+
+      Assert
+        (Textrender.Load_Font
+           (R, Path => Font_Path, Pixel_Size => 16,
+            Cell_Width => 8, Cell_Height => 20,
+            Atlas_Width => 512, Atlas_Height => 512) = Textrender.Success,
+         "the text font loads");
+      Assert (Textrender.Add_Fallback_Font (R, Twemoji) = Textrender.Success,
+              "and a layered colour font joins the chain");
+
+      --  No decoder is installed, deliberately: layers are outlines, not
+      --  pictures, so this path must work without one.
+      Assert (Textrender.Has_Colour_Glyph (R, Party),
+              "a layered glyph is available with no decoder installed");
+      Assert (Textrender.Get_Colour_Glyph (R, Party, G) = Textrender.Success,
+              "and composites");
+      Assert (G.Width > 0 and then G.Height > 0,
+              "at a real size, got" & Natural'Image (G.Width)
+              & " x" & Natural'Image (G.Height));
+
+      declare
+         Pixels : constant access constant Textrender.Rgba_Buffer :=
+           Textrender.Colour_Glyph_Pixels (R, Party);
+         Opaque  : Natural := 0;
+         Coloured : Natural := 0;
+      begin
+         Assert (Pixels /= null, "with pixels behind it");
+         Assert (Pixels'Length = G.Width * G.Height * 4,
+                 "four bytes for each of them");
+
+         for Pixel in 0 .. G.Width * G.Height - 1 loop
+            declare
+               Red   : constant Natural := Natural (Pixels (Pixel * 4));
+               Green : constant Natural := Natural (Pixels (Pixel * 4 + 1));
+               Blue  : constant Natural := Natural (Pixels (Pixel * 4 + 2));
+               A     : constant Natural := Natural (Pixels (Pixel * 4 + 3));
+            begin
+               if A > 128 then
+                  Opaque := Opaque + 1;
+
+                  --  Grey would mean the palette was never applied and the
+                  --  coverage was written straight through.
+                  if abs (Red - Green) > 30 or else abs (Green - Blue) > 30 then
+                     Coloured := Coloured + 1;
+                  end if;
+               end if;
+            end;
+         end loop;
+
+         Assert (Opaque > (G.Width * G.Height) / 20,
+                 "something was actually drawn, got" & Natural'Image (Opaque)
+                 & " opaque of" & Natural'Image (G.Width * G.Height));
+         Assert (Coloured > 0,
+                 "and it carries palette colour rather than bare coverage");
+      end;
+
+      Textrender.Reset (R);
+   end Test_Layered_Colour_Glyph;
 
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -1505,6 +1608,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Host_Colour_Font_Has_Pictures'Access,
          "whatever colour font this host ships, a picture can be found in it");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Layered_Colour_Glyph'Access,
+         "a COLR/CPAL glyph is composited from its layers, in colour");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

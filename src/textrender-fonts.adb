@@ -804,6 +804,166 @@ package body Textrender.Fonts is
         or else F.Sbix_Table.Found;
    end Has_Colour_Bitmaps;
 
+   function Has_Colour_Layers (F : Font) return Boolean is
+   begin
+      --  Both tables are needed: layers without a palette have no colours, and
+      --  the outlines they name have to be rasterizable.
+      return F.Colr_Table.Found
+        and then F.Cpal_Table.Found
+        and then F.Loca_Table.Found
+        and then F.Glyf_Table.Found;
+   end Has_Colour_Layers;
+
+   --  COLR v0: a header, then baseGlyphRecords sorted by glyph id, each naming a
+   --  run of layerRecords. Found by binary search, as the sort invites.
+   procedure Find_Colour_Base
+     (F           : Font;
+      Glyph_Index : Natural;
+      Found       : out Boolean;
+      First_Layer : out Natural;
+      Count       : out Natural);
+
+   procedure Find_Colour_Base
+     (F           : Font;
+      Glyph_Index : Natural;
+      Found       : out Boolean;
+      First_Layer : out Natural;
+      Count       : out Natural)
+   is
+      Base : constant Natural := F.Colr_Table.Offset;
+      Num_Base    : Natural;
+      Base_Offset : Natural;
+      Low, High   : Integer;
+   begin
+      Found := False;
+      First_Layer := 0;
+      Count := 0;
+
+      if not Has_Colour_Layers (F) or else not Has_Bytes (F, Base, 14) then
+         return;
+      end if;
+
+      --  Version 0 is the layer model. Version 1 adds gradients and its own
+      --  records; its v0 part is still readable, so it is not refused here.
+      Num_Base := U16 (F, Base + 2);
+      Base_Offset := Base + U32 (F, Base + 4);
+
+      Low := 0;
+      High := Num_Base - 1;
+
+      while Low <= High loop
+         declare
+            Middle : constant Natural := Natural ((Low + High) / 2);
+            At_Rec : constant Natural := Base_Offset + Middle * 6;
+            Gid    : Natural;
+         begin
+            exit when not Has_Bytes (F, At_Rec, 6);
+
+            Gid := U16 (F, At_Rec);
+
+            if Gid = Glyph_Index then
+               First_Layer := U16 (F, At_Rec + 2);
+               Count := U16 (F, At_Rec + 4);
+               Found := Count > 0;
+               return;
+            elsif Gid < Glyph_Index then
+               Low := Middle + 1;
+            else
+               High := Middle - 1;
+            end if;
+         end;
+      end loop;
+   end Find_Colour_Base;
+
+   function Colour_Layer_Count
+     (F           : Font;
+      Glyph_Index : Natural)
+      return Natural
+   is
+      Found : Boolean;
+      First : Natural;
+      Count : Natural;
+   begin
+      Find_Colour_Base (F, Glyph_Index, Found, First, Count);
+      return (if Found then Count else 0);
+   exception
+      when others =>
+         return 0;
+   end Colour_Layer_Count;
+
+   function Colour_Layer_At
+     (F           : Font;
+      Glyph_Index : Natural;
+      Layer       : Natural)
+      return Colour_Layer
+   is
+      Result : Colour_Layer;
+      Found  : Boolean;
+      First  : Natural;
+      Count  : Natural;
+   begin
+      Find_Colour_Base (F, Glyph_Index, Found, First, Count);
+
+      if not Found or else Layer >= Count then
+         return Result;
+      end if;
+
+      declare
+         Colr        : constant Natural := F.Colr_Table.Offset;
+         Layer_Base  : constant Natural := Colr + U32 (F, Colr + 8);
+         At_Layer    : constant Natural := Layer_Base + (First + Layer) * 4;
+         Palette_Idx : Natural;
+      begin
+         if not Has_Bytes (F, At_Layer, 4) then
+            return Result;
+         end if;
+
+         Result.Glyph_Index := U16 (F, At_Layer);
+         Palette_Idx := U16 (F, At_Layer + 2);
+
+         --  0xFFFF means "the text colour", which this crate does not know here.
+         --  Left at opaque black; a caller wanting its own colour can tint it.
+         if Palette_Idx = 16#FFFF# then
+            return Result;
+         end if;
+
+         declare
+            Cpal        : constant Natural := F.Cpal_Table.Offset;
+            Num_Entries : Natural;
+            Records_Off : Natural;
+            At_Colour   : Natural;
+         begin
+            if not Has_Bytes (F, Cpal, 12) then
+               return Result;
+            end if;
+
+            Num_Entries := U16 (F, Cpal + 2);
+            Records_Off := Cpal + U32 (F, Cpal + 8);
+
+            if Palette_Idx >= Num_Entries then
+               return Result;
+            end if;
+
+            At_Colour := Records_Off + Palette_Idx * 4;
+
+            if not Has_Bytes (F, At_Colour, 4) then
+               return Result;
+            end if;
+
+            --  CPAL stores colour records blue first, not red.
+            Result.Blue  := Byte_At (F, At_Colour);
+            Result.Green := Byte_At (F, At_Colour + 1);
+            Result.Red   := Byte_At (F, At_Colour + 2);
+            Result.Alpha := Byte_At (F, At_Colour + 3);
+         end;
+      end;
+
+      return Result;
+   exception
+      when others =>
+         return Colour_Layer'(others => <>);
+   end Colour_Layer_At;
+
    function Is_Bitmap_Only (F : Font) return Boolean is
    begin
       return Has_Colour_Bitmaps (F)
@@ -1182,6 +1342,15 @@ package body Textrender.Fonts is
 
       if Find_Table (F, 's', 'b', 'i', 'x', Info) then
          F.Sbix_Table := Info;
+      end if;
+
+      --  Layered colour glyphs: outlines plus a palette, rather than pictures.
+      if Find_Table (F, 'C', 'O', 'L', 'R', Info) then
+         F.Colr_Table := Info;
+      end if;
+
+      if Find_Table (F, 'C', 'P', 'A', 'L', Info) then
+         F.Cpal_Table := Info;
       end if;
 
       --  Outlines are optional when the font carries colour bitmaps instead.
