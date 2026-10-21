@@ -62,11 +62,23 @@ jobs:
       - name: Fetch layered colour fonts for the tests
         shell: bash
         run: |
-          curl -sL --retry 3 -o "$RUNNER_TEMP/TwemojiMozilla.ttf" \
+          # Fetched from a fixed commit: noto-emoji moved its fonts on main,
+          # and the old path then served a 404 page that failed as a font.
+          fetch_font() {
+            curl -fsSL --retry 3 -o "$1" "$2"
+            # sfnt version 0x00010000 (TrueType) or 'OTTO' (CFF): anything
+            # else is an error page, not a fixture.
+            magic=$(head -c 4 "$1" | od -An -tx1 | tr -d ' \n')
+            case "$magic" in
+              00010000|4f54544f) ;;
+              *) echo "::error::$2 did not download a font (starts $magic)"; exit 1 ;;
+            esac
+          }
+          fetch_font "$RUNNER_TEMP/TwemojiMozilla.ttf" \
             https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/Twemoji.Mozilla.ttf
           echo "TEXTRENDER_COLR_FONT=$RUNNER_TEMP/TwemojiMozilla.ttf" >> "$GITHUB_ENV"
-          curl -sL --retry 3 -o "$RUNNER_TEMP/Noto-COLRv1.ttf" \
-            https://github.com/googlefonts/noto-emoji/raw/main/fonts/Noto-COLRv1.ttf
+          fetch_font "$RUNNER_TEMP/Noto-COLRv1.ttf" \
+            https://github.com/googlefonts/noto-emoji/raw/1ffdd21391dd1f25c081fa93a9dea0c7c029442b/2D/fonts/Noto-COLRv1.ttf
           echo "TEXTRENDER_COLRV1_FONT=$RUNNER_TEMP/Noto-COLRv1.ttf" >> "$GITHUB_ENV"
 
       - name: Build the library
