@@ -368,8 +368,10 @@ package Textrender is
       Extent : Image_Extent_Reader;
       Decode : Image_Decoder);
 
-   --  Is a colour glyph available for this codepoint -- a font in the chain has a
-   --  picture for it, and a decoder is installed to read it?
+   --  Is a colour glyph the one to draw for this codepoint -- a font in the chain
+   --  has a picture for it, the primary font has no ordinary glyph for it (unless
+   --  the primary is that colour font), and a decoder is installed to read it if
+   --  it is a picture?
    function Has_Colour_Glyph (R : Renderer; C : Codepoint) return Boolean;
 
    --  How big a colour glyph's picture is, and where it sits on the line.

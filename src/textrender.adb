@@ -931,6 +931,15 @@ package body Textrender is
       Bitmap : Textrender.Fonts.Colour_Bitmap;
       Source : Natural;
       Glyph  : Natural;
+
+      --  Whether the primary font, ahead of Source, already draws C as text.
+      --  Colour emoji fonts also carry the digits, '#' and '*' (keycap bases),
+      --  and taking those from the emoji font drew every number in a line as
+      --  a picture beside text-font punctuation. Only the primary counts: the
+      --  wide-coverage fallbacks ahead of an emoji font carry plain outlines
+      --  for real emoji too, and those must stay in colour.
+      function Covered_Earlier return Boolean is
+        (Source > 0 and then Textrender.Fonts.Has_Glyph (R.State.Font, C));
    begin
       if R.State = null then
          return False;
@@ -943,7 +952,7 @@ package body Textrender is
       Find_Layer_Source (R, C, Found, Glyph, Source);
 
       if Found then
-         return True;
+         return not Covered_Earlier;
       end if;
 
       if R.State.Extent_Reader = null or else R.State.Decoder = null then
@@ -951,7 +960,7 @@ package body Textrender is
       end if;
 
       Find_Colour_Source (R, C, Found, Bitmap, Source);
-      return Found;
+      return Found and then not Covered_Earlier;
    end Has_Colour_Glyph;
 
    procedure Find_Layer_Source

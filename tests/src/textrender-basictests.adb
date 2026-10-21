@@ -1563,6 +1563,11 @@ package body Textrender.BasicTests is
       Assert
         (Textrender.Has_Colour_Glyph (R, Grinning),
          "with a decoder installed the emoji has a colour glyph");
+      --  The emoji font has pictures for the keycap bases too, but the text
+      --  font ahead of it has the digits, so a number stays text.
+      Assert
+        (not Textrender.Has_Colour_Glyph (R, Character'Pos ('7')),
+         "a digit the text font has is not taken from the colour font");
 
       Assert
         (Textrender.Get_Colour_Glyph (R, Grinning, G) = Textrender.Success,
