@@ -28,6 +28,11 @@ package Textrender.Atlases is
 
    procedure Clear (A : in out Atlas);
 
+   --  Make the atlas twice as tall, up to Max_Height rows, keeping every
+   --  pixel where it is, so what is packed stays packed at the same place.
+   --  False when it is that tall already.
+   function Grow (A : in out Atlas; Max_Height : Positive) return Boolean;
+
    procedure Write_Pixel
      (A : in out Atlas;
       X : Natural;

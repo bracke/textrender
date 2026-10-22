@@ -293,6 +293,14 @@ package Textrender is
    --  Atlas height in pixels.
    function Atlas_Height (R : Renderer) return Positive;
 
+   --  Let R's atlas grow, doubling its height up to Max_Height rows, when a
+   --  glyph no longer fits, rather than answer Atlas_Full. Glyphs already
+   --  packed keep their pixels; the U and V a cached glyph reports are
+   --  rescaled, but a caller that keeps its own copy of them must take them
+   --  again (or work from the pixel rectangle) after the height changes.
+   --  Off (0) unless asked for.
+   procedure Set_Atlas_Growth (R : in out Renderer; Max_Height : Natural);
+
    --  Read-only access to R's atlas alpha buffer.
    --
    --  The buffer is row-major:

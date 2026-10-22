@@ -79,6 +79,8 @@ package body Textrender is
       Cell_Width_V  : Positive := 1;
       Cell_Height_V : Positive := 1;
       Atlas_Dirty_V : Boolean := False;
+      --  How tall the atlas may grow when a glyph does not fit; 0 for not.
+      Atlas_Max_Height : Natural := 0;
 
       --  Colour glyphs: where each one sits, and the sheet they sit in.
       --
@@ -308,6 +310,42 @@ package body Textrender is
       return Textrender.Fonts.Has_Glyph (R.State.Font, C);
    end Has_Glyph;
 
+   --  Room for a W by H rectangle in R's atlas, growing it when allowed and
+   --  full. Growing changes the height, so every cached glyph's V is taken
+   --  again from its pixel rectangle.
+   function Pack
+     (R : in out Renderer; W, H : Positive; X, Y : out Natural) return Boolean
+   is
+      procedure Rescale (Cache : in out Glyph_Caches.Map) is
+         Height : constant Float := Float (Textrender.Atlases.Height (R.State.Atlas));
+      begin
+         for Position in Cache.Iterate loop
+            declare
+               Item : Cached_Glyph renames Cache.Reference (Position);
+            begin
+               if Item.Metric.W > 0 and then Item.Metric.H > 0 then
+                  Item.Metric.V0 := Float (Item.Metric.Y) / Height;
+                  Item.Metric.V1 := Float (Item.Metric.Y + Item.Metric.H) / Height;
+               end if;
+            end;
+         end loop;
+      end Rescale;
+   begin
+      loop
+         if Textrender.Atlases.Allocate_Rect (R.State.Atlas, W => W, H => H, X => X, Y => Y) then
+            return True;
+         end if;
+         if R.State.Atlas_Max_Height = 0
+           or else not Textrender.Atlases.Grow (R.State.Atlas, R.State.Atlas_Max_Height)
+         then
+            return False;
+         end if;
+         Rescale (R.State.Cache);
+         Rescale (R.State.Italic_Cache);
+         R.State.Atlas_Dirty_V := True;
+      end loop;
+   end Pack;
+
    -----------------------------
    --  Get_Glyph
    -----------------------------
@@ -478,8 +516,8 @@ package body Textrender is
            (if Raw_H <= 0.0 then 1
             else Positive (Integer (Raw_H + 0.999)));
 
-         if not Textrender.Atlases.Allocate_Rect
-           (R.State.Atlas,
+         if not Pack
+           (R,
             W => Glyph_W + Glyph_Padding * 2,
             H => Glyph_H + Glyph_Padding * 2,
             X => Pack_X,
@@ -694,8 +732,8 @@ package body Textrender is
            (if Raw_H <= 0.0 then 1
             else Positive (Integer (Raw_H + 0.999)));
 
-         if not Textrender.Atlases.Allocate_Rect
-           (R.State.Atlas,
+         if not Pack
+           (R,
             W => Glyph_W + Glyph_Padding * 2,
             H => Glyph_H + Glyph_Padding * 2,
             X => Pack_X,
@@ -801,6 +839,11 @@ package body Textrender is
    begin
       return Textrender.Atlases.Height (R.State.Atlas);
    end Atlas_Height;
+
+   procedure Set_Atlas_Growth (R : in out Renderer; Max_Height : Natural) is
+   begin
+      R.State.Atlas_Max_Height := Max_Height;
+   end Set_Atlas_Growth;
 
    function Atlas_Pixels
      (R : Renderer) return access constant Alpha_Buffer

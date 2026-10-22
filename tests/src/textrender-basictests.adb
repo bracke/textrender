@@ -538,6 +538,47 @@ package body Textrender.BasicTests is
          "Too-small atlas should return Atlas_Full");
    end Test_Atlas_Full;
 
+   --  With growth allowed, a small atlas grows instead of filling up, and a
+   --  glyph packed before it grew still reports its own pixels.
+   procedure Test_Atlas_Growth
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Status : Textrender.Status_Code;
+      M      : Textrender.Glyph_Metric;
+      First  : Textrender.Glyph_Metric;
+   begin
+      Textrender.Reset (R);
+      Status :=
+        Textrender.Load_Font
+          (R, Path         => Font_Path,
+           Pixel_Size   => 32,
+           Cell_Width   => 20,
+           Cell_Height  => 40,
+           Atlas_Width  => 128,
+           Atlas_Height => 64);
+      Assert (Status = Textrender.Success, "Load_Font should succeed");
+      Textrender.Set_Atlas_Growth (R, Max_Height => 1024);
+
+      Status := Textrender.Get_Glyph (R, C => Character'Pos ('A'), M => First);
+      Assert (Status = Textrender.Success, "the first glyph packs");
+
+      for C in Character'Pos ('B') .. Character'Pos ('z') loop
+         Status := Textrender.Get_Glyph (R, C => Textrender.Codepoint (C), M => M);
+         Assert (Status /= Textrender.Atlas_Full, "a growing atlas does not fill up");
+      end loop;
+      Assert (Textrender.Atlas_Height (R) > 64, "the atlas grew taller");
+      Assert (Textrender.Atlas_Width (R) = 128, "the atlas kept its width");
+
+      Status := Textrender.Get_Glyph (R, C => Character'Pos ('A'), M => M);
+      Assert
+        (Status = Textrender.Success
+         and then M.Y = First.Y
+         and then abs (M.V0 - Float (M.Y) / Float (Textrender.Atlas_Height (R))) < 1.0E-6,
+         "a glyph packed before the growth keeps its pixels, and its V follows the new height");
+   end Test_Atlas_Growth;
+
    procedure Test_Glyph_Cache
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1753,6 +1794,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Atlas_Full'Access,
          "Get_Glyph reports Atlas_Full");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Atlas_Growth'Access,
+         "Get_Glyph grows an atlas allowed to grow");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

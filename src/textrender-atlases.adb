@@ -88,6 +88,25 @@ package body Textrender.Atlases is
    end Clear;
 
    -----------------------------
+   --  Grow
+   -----------------------------
+
+   function Grow (A : in out Atlas; Max_Height : Positive) return Boolean is
+      New_Height : constant Positive := Positive'Min (A.Height_V * 2, Max_Height);
+      Old        : Alpha_Buffer_Access := A.Data;
+   begin
+      if New_Height <= A.Height_V or else Old = null then
+         return False;
+      end if;
+      A.Data := new Alpha_Buffer'(0 .. A.Width_V * New_Height - 1 => 0);
+      --  Rows are whole and in order, so the old rows are the new first ones.
+      A.Data (0 .. Old'Length - 1) := Old.all;
+      Free (Old);
+      A.Height_V := New_Height;
+      return True;
+   end Grow;
+
+   -----------------------------
    --  Allocate_Rect
    -----------------------------
 
