@@ -565,7 +565,7 @@ package body Textrender.BasicTests is
       Assert (Status = Textrender.Success, "the first glyph packs");
 
       for C in Character'Pos ('B') .. Character'Pos ('z') loop
-         Status := Textrender.Get_Glyph (R, C => Textrender.Codepoint (C), M => M);
+         Status := Textrender.Get_Glyph (R, C => C, M => M);
          Assert (Status /= Textrender.Atlas_Full, "a growing atlas does not fill up");
       end loop;
       Assert (Textrender.Atlas_Height (R) > 64, "the atlas grew taller");
@@ -577,7 +577,47 @@ package body Textrender.BasicTests is
          and then M.Y = First.Y
          and then abs (M.V0 - Float (M.Y) / Float (Textrender.Atlas_Height (R))) < 1.0E-6,
          "a glyph packed before the growth keeps its pixels, and its V follows the new height");
+      Textrender.Set_Atlas_Growth (R, Max_Height => 0);
    end Test_Atlas_Growth;
+
+   procedure Test_Atlas_Eviction
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Status : Textrender.Status_Code;
+      M      : Textrender.Glyph_Metric;
+      Before : Natural;
+   begin
+      Textrender.Reset (R);
+      Status :=
+        Textrender.Load_Font
+          (R, Path         => Font_Path,
+           Pixel_Size   => 32,
+           Cell_Width   => 20,
+           Cell_Height  => 40,
+           Atlas_Width  => 128,
+           Atlas_Height => 64);
+      Assert (Status = Textrender.Success, "Load_Font should succeed");
+      Textrender.Set_Atlas_Growth (R, Max_Height => 0);
+      Textrender.Set_Atlas_Eviction (R, Enabled => True);
+      Before := Textrender.Atlas_Generation (R);
+
+      for C in Character'Pos ('A') .. Character'Pos ('z') loop
+         Status := Textrender.Get_Glyph (R, C => C, M => M);
+         Assert (Status /= Textrender.Atlas_Full, "an evicting atlas does not fill up");
+         Assert
+           (M.X + M.W <= Textrender.Atlas_Width (R) and then M.Y + M.H <= Textrender.Atlas_Height (R),
+            "every glyph lies inside the atlas");
+      end loop;
+      Assert (Textrender.Atlas_Generation (R) /= Before, "the atlas was emptied to make room");
+      Assert (Textrender.Atlas_Height (R) = 64, "an atlas not allowed to grow keeps its size");
+
+      --  A glyph forgotten by the emptying is packed again when asked for.
+      Status := Textrender.Get_Glyph (R, C => Character'Pos ('A'), M => M);
+      Assert (Status = Textrender.Success and then M.W > 0, "an evicted glyph packs again");
+      Textrender.Set_Atlas_Eviction (R, Enabled => False);
+   end Test_Atlas_Eviction;
 
    procedure Test_Glyph_Cache
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1799,6 +1839,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Atlas_Growth'Access,
          "Get_Glyph grows an atlas allowed to grow");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Atlas_Eviction'Access,
+         "Get_Glyph empties a full atlas allowed to evict");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

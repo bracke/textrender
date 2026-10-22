@@ -88,6 +88,18 @@ package body Textrender.Atlases is
    end Clear;
 
    -----------------------------
+   --  Empty
+   -----------------------------
+
+   procedure Empty (A : in out Atlas) is
+   begin
+      Clear (A);
+      A.Next_X     := 0;
+      A.Next_Y     := 0;
+      A.Row_Height := 0;
+   end Empty;
+
+   -----------------------------
    --  Grow
    -----------------------------
 

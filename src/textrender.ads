@@ -301,6 +301,16 @@ package Textrender is
    --  Off (0) unless asked for.
    procedure Set_Atlas_Growth (R : in out Renderer; Max_Height : Natural);
 
+   --  Let R empty its atlas, rather than answer Atlas_Full, when a glyph does
+   --  not fit and the atlas cannot grow any further: every glyph packed so far
+   --  is forgotten and packed again when next asked for. A caller that keeps
+   --  metrics across glyph requests must watch Atlas_Generation and take them
+   --  again when it changes. Off unless asked for.
+   procedure Set_Atlas_Eviction (R : in out Renderer; Enabled : Boolean);
+
+   --  How many times R's atlas has been emptied to make room; it wraps.
+   function Atlas_Generation (R : Renderer) return Natural;
+
    --  Read-only access to R's atlas alpha buffer.
    --
    --  The buffer is row-major:

@@ -81,6 +81,10 @@ package body Textrender is
       Atlas_Dirty_V : Boolean := False;
       --  How tall the atlas may grow when a glyph does not fit; 0 for not.
       Atlas_Max_Height : Natural := 0;
+      --  Whether a full atlas, grown as far as it may, is emptied to make
+      --  room, and how many times it has been.
+      Atlas_Evicts     : Boolean := False;
+      Atlas_Generation_V : Natural := 0;
 
       --  Colour glyphs: where each one sits, and the sheet they sit in.
       --
@@ -316,18 +320,28 @@ package body Textrender is
    function Pack
      (R : in out Renderer; W, H : Positive; X, Y : out Natural) return Boolean
    is
-      procedure Rescale (Cache : in out Glyph_Caches.Map) is
+      Emptied : Boolean := False;
+
+      procedure Rescale (Item : in out Cached_Glyph) is
          Height : constant Float := Float (Textrender.Atlases.Height (R.State.Atlas));
       begin
+         if Item.Metric.W > 0 and then Item.Metric.H > 0 then
+            Item.Metric.V0 := Float (Item.Metric.Y) / Height;
+            Item.Metric.V1 := Float (Item.Metric.Y + Item.Metric.H) / Height;
+         end if;
+      end Rescale;
+
+      procedure Rescale (Cache : in out Glyph_Caches.Map) is
+      begin
          for Position in Cache.Iterate loop
-            declare
-               Item : Cached_Glyph renames Cache.Reference (Position);
-            begin
-               if Item.Metric.W > 0 and then Item.Metric.H > 0 then
-                  Item.Metric.V0 := Float (Item.Metric.Y) / Height;
-                  Item.Metric.V1 := Float (Item.Metric.Y + Item.Metric.H) / Height;
-               end if;
-            end;
+            Rescale (Cache.Reference (Position));
+         end loop;
+      end Rescale;
+
+      procedure Rescale (Cache : in out Glyph_Index_Caches.Map) is
+      begin
+         for Position in Cache.Iterate loop
+            Rescale (Cache.Reference (Position));
          end loop;
       end Rescale;
    begin
@@ -335,13 +349,26 @@ package body Textrender is
          if Textrender.Atlases.Allocate_Rect (R.State.Atlas, W => W, H => H, X => X, Y => Y) then
             return True;
          end if;
-         if R.State.Atlas_Max_Height = 0
-           or else not Textrender.Atlases.Grow (R.State.Atlas, R.State.Atlas_Max_Height)
+         if R.State.Atlas_Max_Height > 0
+           and then Textrender.Atlases.Grow (R.State.Atlas, R.State.Atlas_Max_Height)
          then
+            Rescale (R.State.Cache);
+            Rescale (R.State.Italic_Cache);
+            Rescale (R.State.Glyph_Index_Cache);
+            Rescale (R.State.Italic_Glyph_Index_Cache);
+         elsif R.State.Atlas_Evicts and then not Emptied then
+            --  Once: a glyph that does not fit an empty atlas never will.
+            Emptied := True;
+            Textrender.Atlases.Empty (R.State.Atlas);
+            R.State.Cache.Clear;
+            R.State.Italic_Cache.Clear;
+            R.State.Glyph_Index_Cache.Clear;
+            R.State.Italic_Glyph_Index_Cache.Clear;
+            R.State.Atlas_Generation_V :=
+              (if R.State.Atlas_Generation_V = Natural'Last then 0 else R.State.Atlas_Generation_V + 1);
+         else
             return False;
          end if;
-         Rescale (R.State.Cache);
-         Rescale (R.State.Italic_Cache);
          R.State.Atlas_Dirty_V := True;
       end loop;
    end Pack;
@@ -844,6 +871,14 @@ package body Textrender is
    begin
       R.State.Atlas_Max_Height := Max_Height;
    end Set_Atlas_Growth;
+
+   procedure Set_Atlas_Eviction (R : in out Renderer; Enabled : Boolean) is
+   begin
+      R.State.Atlas_Evicts := Enabled;
+   end Set_Atlas_Eviction;
+
+   function Atlas_Generation (R : Renderer) return Natural is
+     (if R.State = null then 0 else R.State.Atlas_Generation_V);
 
    function Atlas_Pixels
      (R : Renderer) return access constant Alpha_Buffer

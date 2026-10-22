@@ -28,6 +28,10 @@ package Textrender.Atlases is
 
    procedure Clear (A : in out Atlas);
 
+   --  Throw away everything packed: every pixel back to zero and the packer
+   --  back to the top-left corner, at the size the atlas has now.
+   procedure Empty (A : in out Atlas);
+
    --  Make the atlas twice as tall, up to Max_Height rows, keeping every
    --  pixel where it is, so what is packed stays packed at the same place.
    --  False when it is that tall already.
