@@ -447,6 +447,16 @@ package Textrender is
 
    --  True when a glyph has been added since the sheet was last taken.
    function Colour_Sheet_Dirty (R : Renderer) return Boolean;
+
+   --  Let R empty a full colour sheet, rather than leave a new picture out:
+   --  every colour glyph packed so far is forgotten and packed again when next
+   --  asked for. Safe for a caller that copies each picture out as it gets it;
+   --  one that keeps sheet coordinates must watch Colour_Sheet_Generation and
+   --  take them again when it changes. Off unless asked for.
+   procedure Set_Colour_Sheet_Eviction (R : in out Renderer; Enabled : Boolean);
+
+   --  How many times R's colour sheet has been emptied to make room; it wraps.
+   function Colour_Sheet_Generation (R : Renderer) return Natural;
    procedure Clear_Colour_Sheet_Dirty (R : in out Renderer);
 
 private

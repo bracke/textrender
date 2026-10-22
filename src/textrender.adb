@@ -96,6 +96,10 @@ package body Textrender is
       Colour_Width  : Natural := 0;
       Colour_Height : Natural := 0;
       Colour_Dirty_V : Boolean := False;
+      --  Whether a full sheet is emptied to make room, and how many times
+      --  it has been.
+      Colour_Evicts  : Boolean := False;
+      Colour_Generation_V : Natural := 0;
 
       --  Shelf packing state: the pen, and how tall the current shelf is.
       Colour_Pen_X  : Natural := 0;
@@ -1436,7 +1440,17 @@ package body Textrender is
       end if;
 
       if R.State.Colour_Pen_Y + Height > Colour_Sheet_Side then
-         return;
+         if not R.State.Colour_Evicts or else Height > Colour_Sheet_Side then
+            return;
+         end if;
+         --  Full: forget every picture in it and start again at the top.
+         R.State.Colour_Sheet.all := [others => 0];
+         R.State.Colour_Cache.Clear;
+         R.State.Colour_Pen_X := 0;
+         R.State.Colour_Pen_Y := 0;
+         R.State.Colour_Shelf := 0;
+         R.State.Colour_Generation_V :=
+           (if R.State.Colour_Generation_V = Natural'Last then 0 else R.State.Colour_Generation_V + 1);
       end if;
 
       X := R.State.Colour_Pen_X;
@@ -1701,5 +1715,14 @@ package body Textrender is
          R.State.Colour_Dirty_V := False;
       end if;
    end Clear_Colour_Sheet_Dirty;
+
+   procedure Set_Colour_Sheet_Eviction (R : in out Renderer; Enabled : Boolean) is
+   begin
+      Ensure_State (R);
+      R.State.Colour_Evicts := Enabled;
+   end Set_Colour_Sheet_Eviction;
+
+   function Colour_Sheet_Generation (R : Renderer) return Natural is
+     (if R.State = null then 0 else R.State.Colour_Generation_V);
 
 end Textrender;

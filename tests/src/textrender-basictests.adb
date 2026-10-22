@@ -94,6 +94,7 @@ package body Textrender.BasicTests is
    --  as a defect in the parser.
    procedure Test_Test_Font_Exists (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Layered_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class);
+   procedure Test_Colour_Sheet_Eviction (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Paint_Graph_Colour_Glyph (T : in out AUnit.Test_Cases.Test_Case'Class);
    procedure Test_Host_Colour_Font_Has_Pictures (T : in out AUnit.Test_Cases.Test_Case'Class);
 
@@ -1609,6 +1610,58 @@ package body Textrender.BasicTests is
       return True;
    end Stub_Decode;
 
+   procedure Test_Colour_Sheet_Eviction (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      Emoji_Path : constant String :=
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf";
+      R : Textrender.Renderer;
+      G : Textrender.Colour_Glyph;
+      Grinning : constant Textrender.Codepoint := 16#1F600#;
+      Before : Natural;
+   begin
+      if not Ada.Directories.Exists (Emoji_Path) then
+         return;
+      end if;
+
+      --  Cells this large make each picture 256 square, so the 512 square
+      --  sheet holds four.
+      Assert
+        (Textrender.Load_Font
+           (R, Path => Font_Path, Pixel_Size => 128,
+            Cell_Width => 128, Cell_Height => 256,
+            Atlas_Width => 512, Atlas_Height => 512) = Textrender.Success,
+         "the text font loads");
+      Assert
+        (Textrender.Add_Fallback_Font (R, Emoji_Path) = Textrender.Success,
+         "and a colour emoji font joins the fallback chain");
+      Textrender.Set_Image_Decoder (R, Stub_Extent'Access, Stub_Decode'Access);
+
+      --  Without eviction the fifth picture finds no room.
+      for Offset in 0 .. 3 loop
+         Assert
+           (Textrender.Get_Colour_Glyph (R, Grinning + Offset, G)
+              = Textrender.Success,
+            "picture" & Offset'Image & " fits the sheet");
+      end loop;
+      Assert
+        (Textrender.Get_Colour_Glyph (R, Grinning + 4, G) /= Textrender.Success,
+         "a full sheet leaves the fifth picture out unless it may evict");
+
+      --  With it, the sheet is emptied and every picture is placed.
+      Textrender.Set_Colour_Sheet_Eviction (R, Enabled => True);
+      Before := Textrender.Colour_Sheet_Generation (R);
+      for Offset in 4 .. 9 loop
+         Assert
+           (Textrender.Get_Colour_Glyph (R, Grinning + Offset, G)
+              = Textrender.Success
+            and then G.X + G.Width <= Textrender.Colour_Sheet_Width (R)
+            and then G.Y + G.Height <= Textrender.Colour_Sheet_Height (R),
+            "picture" & Offset'Image & " is placed inside the sheet");
+      end loop;
+      Assert (Textrender.Colour_Sheet_Generation (R) /= Before, "the sheet was emptied to make room");
+   end Test_Colour_Sheet_Eviction;
+
    procedure Test_Colour_Glyph_Pipeline (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
 
@@ -1844,6 +1897,11 @@ package body Textrender.BasicTests is
         (T,
          Test_Atlas_Eviction'Access,
          "Get_Glyph empties a full atlas allowed to evict");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Colour_Sheet_Eviction'Access,
+         "Get_Colour_Glyph empties a full colour sheet allowed to evict");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,
