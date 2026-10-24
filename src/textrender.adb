@@ -1211,9 +1211,6 @@ package body Textrender is
                Opacity := Mix (A.Alpha, B.Alpha);
             end;
          end;
-      exception
-         when others =>
-            null;
       end Fill_At;
 
       X_Min, Y_Min, X_Max, Y_Max : Integer := 0;
