@@ -1199,11 +1199,16 @@ package body Textrender is
                F    : constant Float :=
                  (if Span <= 0.0 then 0.0
                   else Float'Max (0.0, Float'Min (1.0, (T - A.Position) / Span)));
+               --  From one stop's channel toward the next's, either way: a
+               --  falling channel gives a negative step, which a Natural
+               --  conversion of it would reject.
+               function Mix (From, To : Natural) return Natural is
+                 (Natural'Max (0, From + Integer (Float (To - From) * F)));
             begin
-               Red := A.Red + Natural (Float (B.Red - A.Red) * F);
-               Green := A.Green + Natural (Float (B.Green - A.Green) * F);
-               Blue := A.Blue + Natural (Float (B.Blue - A.Blue) * F);
-               Opacity := A.Alpha + Natural (Float (B.Alpha - A.Alpha) * F);
+               Red := Mix (A.Red, B.Red);
+               Green := Mix (A.Green, B.Green);
+               Blue := Mix (A.Blue, B.Blue);
+               Opacity := Mix (A.Alpha, B.Alpha);
             end;
          end;
       exception

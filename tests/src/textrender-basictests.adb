@@ -218,6 +218,19 @@ package body Textrender.BasicTests is
               "and paints");
       Assert (G.Width > 0 and then G.Height > 0, "at a real size");
 
+      --  U+1F303 NIGHT WITH STARS: gradients whose channels fall from stop to
+      --  stop, a negative step toward the next stop (Windows' emoji font has
+      --  them in U+1F4C1 FILE FOLDER). Every pixel of such a fill once failed
+      --  a range check -- left unpainted, and on Windows the traceback the
+      --  exception collected crashed the unwinder.
+      declare
+         Night : Textrender.Colour_Glyph;
+      begin
+         Assert (Textrender.Get_Colour_Glyph (R, 16#1F303#, Night) = Textrender.Success,
+                 "a falling gradient paints");
+         Assert (Night.Width > 0 and then Night.Height > 0, "at a real size too");
+      end;
+
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
            Textrender.Colour_Sheet_Pixels (R);
