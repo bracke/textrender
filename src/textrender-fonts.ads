@@ -157,7 +157,7 @@ package Textrender.Fonts is
    --  "draw this glyph, through this transform, with this fill", which is all a
    --  rasterizer needs.
 
-   type Gradient_Kind is (Solid_Fill, Linear_Gradient, Radial_Gradient);
+   type Gradient_Kind is (Solid_Fill, Linear_Gradient, Radial_Gradient, Sweep_Gradient);
 
    type Colour_Stop is record
       Position : Float   := 0.0;
@@ -187,6 +187,11 @@ package Textrender.Fonts is
       X2, Y2     : Float := 0.0;
       Radius_0   : Float := 0.0;
       Radius_1   : Float := 0.0;
+
+      --  Sweep_Gradient: the angles, in degrees counter-clockwise from the
+      --  x axis, that the colour line's 0 and 1 fall on around (X0, Y0).
+      Start_Angle : Float := 0.0;
+      End_Angle   : Float := 0.0;
    end record;
 
    --  One glyph to draw, with the transform in force where it appeared.

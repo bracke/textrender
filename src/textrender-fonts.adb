@@ -1,4 +1,6 @@
 with Ada.Directories;
+with Ada.Numerics;
+with Ada.Numerics.Elementary_Functions; use Ada.Numerics.Elementary_Functions;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
@@ -1219,6 +1221,20 @@ package body Textrender.Fonts is
          Depth : Natural)
       is
          Format : Natural;
+
+         --  The child at Paint + 1 under the affine (Xx, Yx, Xy, Yy) about
+         --  the centre (Cx, Cy), composed with what is in force.
+         procedure Walk_Affine (At_Paint : Natural; Xx_A, Yx_A, Xy_A, Yy_A, Cx, Cy : Float) is
+            --  About a centre: translate it to the origin, apply, translate back.
+            Ex : constant Float := Cx - (Xx_A * Cx + Xy_A * Cy);
+            Ey : constant Float := Cy - (Yx_A * Cx + Yy_A * Cy);
+         begin
+            Walk (At_Paint + U24 (F, At_Paint + 1),
+                  XX * Xx_A + XY * Yx_A, XX * Xy_A + XY * Yy_A,
+                  YX * Xx_A + YY * Yx_A, YX * Xy_A + YY * Yy_A,
+                  DX + XX * Ex + XY * Ey, DY + YX * Ex + YY * Ey,
+                  Glyph, Depth + 1);
+         end Walk_Affine;
       begin
          if Depth > Max_Paint_Depth
            or else Total >= Max_Colour_Draws
@@ -1344,6 +1360,70 @@ package body Textrender.Fonts is
                         Glyph, Depth + 1);
                end;
 
+            when 8 | 9 =>
+               --  PaintSweepGradient: a colour line around a centre, from
+               --  one angle to another (in half turns, counter-clockwise).
+               declare
+                  Fill : Paint_Fill;
+               begin
+                  Fill.Kind := Sweep_Gradient;
+                  Read_Colour_Line (F, Paint + U24 (F, Paint + 1), Fill);
+                  Fill.X0 := Float (I16 (F, Paint + 4));
+                  Fill.Y0 := Float (I16 (F, Paint + 6));
+                  Fill.Start_Angle := 180.0 * F2Dot14 (F, Paint + 8);
+                  Fill.End_Angle := 180.0 * F2Dot14 (F, Paint + 10);
+                  Emit (Glyph, XX, XY, YX, YY, DX, DY, Fill);
+               end;
+
+            when 18 | 19 =>
+               --  PaintScaleAroundCenter.
+               Walk_Affine
+                 (Paint, F2Dot14 (F, Paint + 4), 0.0, 0.0, F2Dot14 (F, Paint + 6),
+                  Float (I16 (F, Paint + 8)), Float (I16 (F, Paint + 10)));
+
+            when 20 | 21 =>
+               --  PaintScaleUniform.
+               declare
+                  S : constant Float := F2Dot14 (F, Paint + 4);
+               begin
+                  Walk_Affine (Paint, S, 0.0, 0.0, S, 0.0, 0.0);
+               end;
+
+            when 22 | 23 =>
+               --  PaintScaleUniformAroundCenter.
+               declare
+                  S : constant Float := F2Dot14 (F, Paint + 4);
+               begin
+                  Walk_Affine (Paint, S, 0.0, 0.0, S, Float (I16 (F, Paint + 6)), Float (I16 (F, Paint + 8)));
+               end;
+
+            when 24 .. 27 =>
+               --  PaintRotate, and around a centre: the angle in half turns,
+               --  counter-clockwise.
+               declare
+                  Angle : constant Float := Ada.Numerics.Pi * F2Dot14 (F, Paint + 4);
+                  Cos_A : constant Float := Cos (Angle);
+                  Sin_A : constant Float := Sin (Angle);
+               begin
+                  Walk_Affine
+                    (Paint, Cos_A, Sin_A, -Sin_A, Cos_A,
+                     (if Format >= 26 then Float (I16 (F, Paint + 6)) else 0.0),
+                     (if Format >= 26 then Float (I16 (F, Paint + 8)) else 0.0));
+               end;
+
+            when 28 .. 31 =>
+               --  PaintSkew, and around a centre: x and y skew angles in half
+               --  turns; x' = x - tan (x skew) * y, y' = tan (y skew) * x + y.
+               declare
+                  X_Skew : constant Float := Ada.Numerics.Pi * F2Dot14 (F, Paint + 4);
+                  Y_Skew : constant Float := Ada.Numerics.Pi * F2Dot14 (F, Paint + 6);
+               begin
+                  Walk_Affine
+                    (Paint, 1.0, Tan (Y_Skew), -Tan (X_Skew), 1.0,
+                     (if Format >= 30 then Float (I16 (F, Paint + 8)) else 0.0),
+                     (if Format >= 30 then Float (I16 (F, Paint + 10)) else 0.0));
+               end;
+
             when 32 =>
                --  PaintComposite. The blend modes are not implemented; both
                --  sides are drawn in order instead, which for the common
@@ -1353,7 +1433,7 @@ package body Textrender.Fonts is
                Walk (Paint + U24 (F, Paint + 1), XX, XY, YX, YY, DX, DY, Glyph, Depth + 1);
 
             when others =>
-               --  Sweep gradients and the variable-only formats: not drawn.
+               --  Formats this version does not define: not drawn.
                null;
          end case;
       end Walk;

@@ -231,6 +231,47 @@ package body Textrender.BasicTests is
          Assert (Night.Width > 0 and then Night.Height > 0, "at a real size too");
       end;
 
+      --  A layer scaled about a centre (PaintScaleAroundCenter) is drawn,
+      --  not dropped with its subtree: U+2620 SKULL AND CROSSBONES is 25
+      --  draws in Noto's build, two of them under that scale.
+      declare
+         Paint_Face : Textrender.Fonts.Font;
+         Index      : Natural;
+         Draws      : Textrender.Fonts.Colour_Draw_Array;
+         Count      : Natural;
+      begin
+         Assert (Textrender.Fonts."=" (Textrender.Fonts.Load (Paint_Face, Paint_Font), Textrender.Fonts.Loaded),
+                 "the colour font loads on its own");
+         Assert (Textrender.Fonts.Glyph_Index_Of (Paint_Face, 16#2620#, Index), "and maps the skull");
+         Assert (Textrender.Fonts.Colour_Draws_For (Paint_Face, Index, Draws, Count) and then Count = 25,
+                 "whose scaled layers are drawn too, got" & Count'Image);
+      end;
+
+      --  Every emoji the font paints renders, until the sheet (which this
+      --  renderer may not empty) is full -- and then says so, not that the
+      --  glyph is missing, so a caller can make room and ask again.
+      declare
+         Full    : Boolean := False;
+         Painted : Natural := 0;
+      begin
+         for C in Textrender.Codepoint range 16#1F300# .. 16#1FAFF# loop
+            if Textrender.Has_Colour_Glyph (R, C) then
+               declare
+                  Probe  : Textrender.Colour_Glyph;
+                  Status : constant Textrender.Status_Code := Textrender.Get_Colour_Glyph (R, C, Probe);
+               begin
+                  Assert (Status in Textrender.Success | Textrender.Atlas_Full,
+                          "a painted emoji renders or fills the sheet, got " & Status'Image
+                          & " for" & C'Image);
+                  Full := Full or else Status = Textrender.Atlas_Full;
+                  Painted := Painted + (if Status = Textrender.Success then 1 else 0);
+               end;
+            end if;
+         end loop;
+         Assert (Painted > 500, "hundreds of emoji paint, got" & Painted'Image);
+         Assert (Full, "and the sheet fills, which is reported");
+      end;
+
       declare
          Pixels : constant access constant Textrender.Rgba_Buffer :=
            Textrender.Colour_Sheet_Pixels (R);
@@ -243,10 +284,14 @@ package body Textrender.BasicTests is
 
          for Pixel in 0 .. G.Width * G.Height - 1 loop
             declare
-               Red   : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
-               Green : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
-               Blue  : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
-               A     : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
+               Red : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
+               Green : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
+               Blue : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
+               A : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
             begin
                if A > 128 then
                   Opaque := Opaque + 1;
@@ -341,10 +386,14 @@ package body Textrender.BasicTests is
 
          for Pixel in 0 .. G.Width * G.Height - 1 loop
             declare
-               Red   : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
-               Green : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
-               Blue  : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
-               A     : constant Natural := Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
+               Red : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4));
+               Green : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 1));
+               Blue : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 2));
+               A : constant Natural :=
+                 Natural (Pixels (((G.Y + Pixel / G.Width) * Stride + G.X + Pixel mod G.Width) * 4 + 3));
             begin
                if A > 128 then
                   Opaque := Opaque + 1;

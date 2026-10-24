@@ -1159,6 +1159,20 @@ package body Textrender is
                   T := ((X - Fill.X0) * DX_L + (Y - Fill.Y0) * DY_L) / Len2;
                end if;
             end;
+         elsif Fill.Kind = Textrender.Fonts.Sweep_Gradient then
+            --  Sweep: the angle around the centre, from the start angle to
+            --  the end one, counter-clockwise.
+            declare
+               Angle : Float :=
+                 (if X = Fill.X0 and then Y = Fill.Y0 then 0.0
+                  else 180.0 / Ada.Numerics.Pi * Arctan (Y - Fill.Y0, X - Fill.X0));
+               Span  : constant Float := Fill.End_Angle - Fill.Start_Angle;
+            begin
+               if Angle < 0.0 then
+                  Angle := Angle + 360.0;
+               end if;
+               T := (if Span = 0.0 then 0.0 else (Angle - Fill.Start_Angle) / Span);
+            end;
          else
             --  Radial, approximated by distance from the outer circle's centre
             --  between the two radii. The two-circle form this format allows is
@@ -1562,9 +1576,10 @@ package body Textrender is
                       then R.State.Font
                       else R.State.Fallbacks (Layer_Source)),
                      Layer_Glyph, Tile, G)
-                 and then Commit_Colour_Tile (R, C, Tile, G)
                then
-                  return Success;
+                  --  A tile that was drawn but has no room left is a full
+                  --  sheet, not a missing glyph: the caller may make room.
+                  return (if Commit_Colour_Tile (R, C, Tile, G) then Success else Atlas_Full);
                end if;
             end;
          end if;
