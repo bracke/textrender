@@ -58,6 +58,14 @@ package body Textrender.Rasterizer is
    Points_Buffer        : Glyph_Point_Vectors.Vector;
    Segments_Buffer      : Segment_Vectors.Vector;
    Active_Segments_Buffer : Active_Edge_Vectors.Vector;
+   Open_Segments_Buffer : Segment_Vectors.Vector;
+
+   --  Whether segment A's top lies above segment B's: the order a glyph's
+   --  segments are swept in, from the top row down.
+   function Higher (A, B : Segment) return Boolean is
+     (Float'Max (A.Y0, A.Y1) > Float'Max (B.Y0, B.Y1));
+
+   package Top_Down is new Segment_Vectors.Generic_Sorting ("<" => Higher);
 
       procedure Prepare_Buffers is
       begin
@@ -68,6 +76,7 @@ package body Textrender.Rasterizer is
          Points_Buffer.Clear;
          Segments_Buffer.Clear;
          Active_Segments_Buffer.Clear;
+         Open_Segments_Buffer.Clear;
 
          if End_Points_Buffer.Capacity < Initial_Contour_Capacity then
             End_Points_Buffer.Reserve_Capacity (Initial_Contour_Capacity);
@@ -201,6 +210,9 @@ package body Textrender.Rasterizer is
       Points         : Glyph_Point_Vectors.Vector renames Points_Buffer;
       Segments       : Segment_Vectors.Vector renames Segments_Buffer;
       Active_Segments : Active_Edge_Vectors.Vector renames Active_Segments_Buffer;
+      Open_Segments   : Segment_Vectors.Vector renames Open_Segments_Buffer;
+      --  The first segment, top down, the sweep has not yet opened.
+      Next_Segment    : Natural := 0;
 
       End_Points_Off : Natural;
       Instr_Len_Off  : Natural;
@@ -331,21 +343,31 @@ package body Textrender.Rasterizer is
          end if;
       end Build_Contour;
 
+      --  The segments a subsample row crosses. Rows come top down, so the
+      --  segments, sorted by their tops, are swept: one opens once the row is
+      --  below its top, and closes for good once the row is below its bottom.
+      --  A segment is active exactly as it was found before, by testing every
+      --  segment; only the order of the active ones differs, which a winding
+      --  number, a sum, does not see.
       procedure Build_Active_Segments
         (Sample_Y : Float)
       is
+         Kept : Natural := Open_Segments.First_Index;
       begin
          Active_Segments.Clear;
 
-         if Segments.Is_Empty then
-            return;
-         end if;
+         --  Element, not indexing: an indexed read of a vector goes through a
+         --  reference whose controlled tamper lock is finalized at every read.
+         while Next_Segment <= Segments.Last_Index
+           and then Float'Max (Segments.Element (Next_Segment).Y0, Segments.Element (Next_Segment).Y1) > Sample_Y
+         loop
+            Open_Segments.Append (Segments.Element (Next_Segment));
+            Next_Segment := Next_Segment + 1;
+         end loop;
 
-         --  Element, not indexing: an indexed read of a vector goes through a reference whose controlled
-         --  tamper lock is finalized at every read.
-         for I in Segments.First_Index .. Segments.Last_Index loop
+         for I in Open_Segments.First_Index .. Open_Segments.Last_Index loop
             declare
-               S : constant Segment := Segments.Element (I);
+               S : constant Segment := Open_Segments.Element (I);
             begin
                if (S.Y0 <= Sample_Y and then S.Y1 > Sample_Y)
                  or else
@@ -356,9 +378,14 @@ package body Textrender.Rasterizer is
                                   X0         => S.X0,
                                   Rise       => S.Y1 - S.Y0,
                                   Upward     => S.Y0 <= Sample_Y));
+                  Open_Segments.Replace_Element (Kept, S);
+                  Kept := Kept + 1;
                end if;
             end;
          end loop;
+         --  An open segment the row does not cross is wholly above it, and so
+         --  above every later row.
+         Open_Segments.Set_Length (Ada.Containers.Count_Type (Kept - Open_Segments.First_Index));
       end Build_Active_Segments;
 
       --  The winding number of the point PX on the row the active edges were
@@ -591,6 +618,8 @@ package body Textrender.Rasterizer is
       pragma Assert
         (not Segments.Is_Empty,
          "No segments generated for non-empty simple glyph");
+      --  Top down, for the sweep that finds each subsample row's segments.
+      Top_Down.Sort (Segments);
       declare
          Samples_Per_Axis : constant Positive := 8;
          Total_Samples    : constant Positive :=
