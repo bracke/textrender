@@ -36,13 +36,28 @@ package body Textrender.Rasterizer is
      (Index_Type   => Natural,
       Element_Type => Segment);
 
+   --  An edge a subsample row crosses, with what its winding test at a point
+   --  of that row needs worked out once for the row: the test's cross product
+   --  (X1 - X0) * (PY - Y0) - (PX - X0) * (Y1 - Y0) has its first term and
+   --  its last factor fixed by the row, and the edge's direction too.
+   type Active_Edge is record
+      Fixed_Term : Float;
+      X0         : Float;
+      Rise       : Float;
+      Upward     : Boolean;
+   end record;
+
+   package Active_Edge_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Natural,
+      Element_Type => Active_Edge);
+
    End_Points_Buffer    : Natural_Vectors.Vector;
    Flags_Buffer         : Natural_Vectors.Vector;
    Xs_Buffer            : Integer_Vectors.Vector;
    Ys_Buffer            : Integer_Vectors.Vector;
    Points_Buffer        : Glyph_Point_Vectors.Vector;
    Segments_Buffer      : Segment_Vectors.Vector;
-   Active_Segments_Buffer : Natural_Vectors.Vector;
+   Active_Segments_Buffer : Active_Edge_Vectors.Vector;
 
       procedure Prepare_Buffers is
       begin
@@ -185,7 +200,7 @@ package body Textrender.Rasterizer is
       Ys             : Integer_Vectors.Vector renames Ys_Buffer;
       Points         : Glyph_Point_Vectors.Vector renames Points_Buffer;
       Segments       : Segment_Vectors.Vector renames Segments_Buffer;
-      Active_Segments : Natural_Vectors.Vector renames Active_Segments_Buffer;
+      Active_Segments : Active_Edge_Vectors.Vector renames Active_Segments_Buffer;
 
       End_Points_Off : Natural;
       Instr_Len_Off  : Natural;
@@ -326,72 +341,45 @@ package body Textrender.Rasterizer is
             return;
          end if;
 
+         --  Element, not indexing: an indexed read of a vector goes through a reference whose controlled
+         --  tamper lock is finalized at every read.
          for I in Segments.First_Index .. Segments.Last_Index loop
             declare
-               S : constant Segment := Segments (I);
+               S : constant Segment := Segments.Element (I);
             begin
                if (S.Y0 <= Sample_Y and then S.Y1 > Sample_Y)
                  or else
                   (S.Y0 > Sample_Y and then S.Y1 <= Sample_Y)
                then
-                  Active_Segments.Append (I);
+                  Active_Segments.Append
+                    (Active_Edge'(Fixed_Term => (S.X1 - S.X0) * (Sample_Y - S.Y0),
+                                  X0         => S.X0,
+                                  Rise       => S.Y1 - S.Y0,
+                                  Upward     => S.Y0 <= Sample_Y));
                end if;
             end;
          end loop;
       end Build_Active_Segments;
 
+      --  The winding number of the point PX on the row the active edges were
+      --  built for: an upward edge with the point on its left counts one, a
+      --  downward edge with the point on its right minus one.
       function Inside_Active
-        (PX : Float;
-         PY : Float) return Boolean
+        (PX : Float) return Boolean
       is
          Winding : Integer := 0;
-
-         function Is_Left
-           (X0 : Float;
-            Y0 : Float;
-            X1 : Float;
-            Y1 : Float;
-            X2 : Float;
-            Y2 : Float) return Float
-         is
-         begin
-            return
-              (X1 - X0) * (Y2 - Y0)
-              - (X2 - X0) * (Y1 - Y0);
-         end Is_Left;
-
       begin
-         if Active_Segments.Is_Empty then
-            return False;
-         end if;
-
          for A in Active_Segments.First_Index .. Active_Segments.Last_Index loop
             declare
-               S : constant Segment := Segments (Active_Segments (A));
+               E    : constant Active_Edge := Active_Segments.Element (A);
+               Left : constant Float := E.Fixed_Term - (PX - E.X0) * E.Rise;
             begin
-               if S.Y0 <= PY and then S.Y1 > PY then
-                  if Is_Left
-                    (X0 => S.X0,
-                     Y0 => S.Y0,
-                     X1 => S.X1,
-                     Y1 => S.Y1,
-                     X2 => PX,
-                     Y2 => PY) > 0.0
-                  then
+               if E.Upward then
+                  if Left > 0.0 then
                      Winding := Winding + 1;
                   end if;
-
-               elsif S.Y0 > PY and then S.Y1 <= PY then
-                  if Is_Left
-                    (X0 => S.X0,
-                     Y0 => S.Y0,
-                     X1 => S.X1,
-                     Y1 => S.Y1,
-                     X2 => PX,
-                     Y2 => PY) < 0.0
-                  then
-                     Winding := Winding - 1;
-                  end if;
+               elsif Left < 0.0 then
+                  Winding := Winding - 1;
                end if;
             end;
          end loop;
@@ -608,43 +596,44 @@ package body Textrender.Rasterizer is
          Total_Samples    : constant Positive :=
            Samples_Per_Axis * Samples_Per_Axis;
       begin
+         --  A row of pixels at a time: the edges a subsample row crosses are found once for the whole row, not
+         --  once for each pixel of it, and each pixel counts its covered samples as before.
          for PY in 0 .. Glyph_H - 1 loop
-            for PX in 0 .. Glyph_W - 1 loop
-               declare
-                  Covered : Natural := 0;
-               begin
-                  for SY in 0 .. Samples_Per_Axis - 1 loop
-                     declare
-                        Font_Y : constant Float :=
-                          Float (Y_Max)
-                          - (Float (PY)
-                             + (Float (SY) + 0.5)
-                               / Float (Samples_Per_Axis))
-                            / Scale;
-                     begin
-                        --  Build active edge list ONCE per subsample row
-                        Build_Active_Segments (Sample_Y => Font_Y);
-
-                        --  Reuse it for all SX samples
-                        for SX in 0 .. Samples_Per_Axis - 1 loop
-                           declare
-                              Font_X : constant Float :=
-                                Float (X_Min)
-                                + (Float (PX)
-                                   + (Float (SX) + 0.5)
-                                     / Float (Samples_Per_Axis))
-                                  / Scale;
-                           begin
-                              if Inside_Active
-                                 (PX => Font_X,
-                                  PY => Font_Y)
-                              then
-                                 Covered := Covered + 1;
-                              end if;
-                           end;
+            declare
+               type Sample_Counts is array (0 .. Glyph_W - 1) of Natural;
+               Covered : Sample_Counts := [others => 0];
+            begin
+               for SY in 0 .. Samples_Per_Axis - 1 loop
+                  declare
+                     Font_Y : constant Float :=
+                       Float (Y_Max)
+                       - (Float (PY)
+                          + (Float (SY) + 0.5)
+                            / Float (Samples_Per_Axis))
+                         / Scale;
+                  begin
+                     Build_Active_Segments (Sample_Y => Font_Y);
+                     if not Active_Segments.Is_Empty then
+                        for PX in 0 .. Glyph_W - 1 loop
+                           for SX in 0 .. Samples_Per_Axis - 1 loop
+                              declare
+                                 Font_X : constant Float :=
+                                   Float (X_Min)
+                                   + (Float (PX)
+                                      + (Float (SX) + 0.5)
+                                        / Float (Samples_Per_Axis))
+                                     / Scale;
+                              begin
+                                 if Inside_Active (PX => Font_X) then
+                                    Covered (PX) := Covered (PX) + 1;
+                                 end if;
+                              end;
+                           end loop;
                         end loop;
-                     end;
-                  end loop;
+                     end if;
+                  end;
+               end loop;
+               for PX in 0 .. Glyph_W - 1 loop
                   if Atlas_X + PX < Textrender.Atlases.Width (A)
                      and then Atlas_Y + PY < Textrender.Atlases.Height (A)
                   then
@@ -654,10 +643,10 @@ package body Textrender.Rasterizer is
                         Y     => Atlas_Y + PY,
                         Value =>
                           Textrender.Atlases.Alpha
-                            ((Covered * 255) / Total_Samples));
+                            ((Covered (PX) * 255) / Total_Samples));
                   end if;
-               end;
-            end loop;
+               end loop;
+            end;
          end loop;
       end;
 

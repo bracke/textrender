@@ -2,6 +2,7 @@ with AUnit.Assertions;
 
 with Ada.Directories;
 with Ada.Environment_Variables;
+with Ada.Strings.Unbounded;
 
 with Textrender.Fonts;
 
@@ -788,6 +789,63 @@ package body Textrender.BasicTests is
       Assert (M1.U1 = M2.U1, "Cached glyph U1 should match");
       Assert (M1.V1 = M2.V1, "Cached glyph V1 should match");
    end Test_Glyph_Cache_Does_Not_Rewrite_Atlas;
+
+   --  The rasterizer's coverage, pixel for pixel: every printable ASCII glyph at four sizes, upright and
+   --  oblique, summed in order so a pixel moved is a pixel changed. The sums are the rasterizer's own, recorded
+   --  from DejaVu Sans Mono; a change that means to keep every pixel must keep them, and one that means to
+   --  change pixels must record them anew. Another host's face has other sums, so only DejaVu is checked.
+   procedure Test_Rasterized_Coverage_Pinned
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      type Size_List is array (Positive range <>) of Positive;
+      Sizes : constant Size_List := [9, 16, 31, 64];
+      Expected : constant array (Sizes'Range, Textrender.Font_Style) of Natural :=
+        [[633_353_829, 824_254_332], [835_679_467, 988_828_538], [434_654_747, 434_633_288],
+         [868_182_973, 587_608_658]];
+
+      function Ordered_Checksum return Natural is
+         Pixels : constant access constant Textrender.Alpha_Buffer := Textrender.Atlas_Pixels (R);
+         Sum : Long_Long_Integer := 0;
+      begin
+         for I in Pixels'Range loop
+            Sum := (Sum * 31 + Long_Long_Integer (Pixels (I))) mod 1_000_000_007;
+         end loop;
+         return Natural (Sum);
+      end Ordered_Checksum;
+      --  Every size and style that differs, so one run shows them all.
+      Wrong : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      if Ada.Directories.Simple_Name (Font_Path) /= "DejaVuSansMono.ttf" then
+         return;
+      end if;
+      for Index in Sizes'Range loop
+         for Style in Textrender.Font_Style loop
+            declare
+               M : Textrender.Glyph_Metric;
+            begin
+               Textrender.Reset (R);
+               Assert
+                 (Textrender.Load_Font
+                    (R, Path => Font_Path, Pixel_Size => Sizes (Index), Cell_Width => 2 * Sizes (Index),
+                     Cell_Height => 2 * Sizes (Index), Atlas_Width => 1024, Atlas_Height => 1024)
+                  = Textrender.Success,
+                  "Load_Font should succeed");
+               for C in 33 .. 126 loop
+                  Assert (Textrender.Get_Glyph (R, C, M, Style) = Textrender.Success,
+                          "Get_Glyph should succeed for" & C'Image);
+               end loop;
+               if Ordered_Checksum /= Expected (Index, Style) then
+                  Ada.Strings.Unbounded.Append
+                    (Wrong, " size" & Sizes (Index)'Image & " " & Style'Image & ":" & Ordered_Checksum'Image);
+               end if;
+            end;
+         end loop;
+      end loop;
+      Assert (Ada.Strings.Unbounded.Length (Wrong) = 0,
+              "coverage sums differ:" & Ada.Strings.Unbounded.To_String (Wrong));
+   end Test_Rasterized_Coverage_Pinned;
 
    procedure Test_Get_Glyph_By_Index
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2072,6 +2130,10 @@ package body Textrender.BasicTests is
         (T,
          Test_Colour_Glyph_Pipeline'Access,
          "Colour Glyph Pipeline");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Test_Rasterized_Coverage_Pinned'Access,
+         "Rasterized Coverage Pinned");
 
    end Register_Tests;
 
