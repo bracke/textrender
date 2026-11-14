@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Ada.Directories;
 with Ada.Numerics;
 with Ada.Numerics.Elementary_Functions; use Ada.Numerics.Elementary_Functions;
@@ -1956,17 +1957,29 @@ package body Textrender.Fonts is
       --  on the stack, so a large font -- a CJK collection is tens of megabytes -- did not
       --  fail to load, it overflowed the stack and took the program with it.
       declare
-         Chunk : Stream_Element_Array (1 .. 65_536);
+         subtype Chunk_Elements is Stream_Element_Array (1 .. 65_536);
+         subtype Chunk_Bytes is Font_Buffer (1 .. 65_536);
+         --  The same 8-bit values, a chunk at a time rather than a byte at a time.
+         function To_Bytes is new Ada.Unchecked_Conversion (Chunk_Elements, Chunk_Bytes);
+         Chunk : Chunk_Elements;
          Into  : Natural := 0;
       begin
          loop
             Read (File => File, Item => Chunk, Last => Last);
             exit when Last < Chunk'First;
 
-            for I in Chunk'First .. Last loop
-               Into := Into + 1;
-               F.Data (Into) := Interfaces.Unsigned_8 (Chunk (I));
-            end loop;
+            --  A file that grew since its size was taken does not fit the buffer: a failed load.
+            if Natural (Last) > Size - Into then
+               Close (File);
+               Reset (F);
+               return Load_Failed;
+            end if;
+            declare
+               Bytes : constant Chunk_Bytes := To_Bytes (Chunk);
+            begin
+               F.Data (Into + 1 .. Into + Natural (Last)) := Bytes (1 .. Natural (Last));
+            end;
+            Into := Into + Natural (Last);
 
             exit when Last < Chunk'Last;
          end loop;

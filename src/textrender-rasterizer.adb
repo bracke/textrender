@@ -257,16 +257,16 @@ package body Textrender.Rasterizer is
 
          I : Natural;
       begin
-         if Points (First).On_Curve then
-            Start_Point := Points (First);
-            Current     := Points (First);
+         if Points.Element (First).On_Curve then
+            Start_Point := Points.Element (First);
+            Current     := Points.Element (First);
             I := First + 1;
          else
-            if Points (Last).On_Curve then
-               Start_Point := Points (Last);
-               Current     := Points (Last);
+            if Points.Element (Last).On_Curve then
+               Start_Point := Points.Element (Last);
+               Current     := Points.Element (Last);
             else
-               Start_Point := Midpoint (Points (Last), Points (First));
+               Start_Point := Midpoint (Points.Element (Last), Points.Element (First));
                Current     := Start_Point;
             end if;
 
@@ -274,7 +274,7 @@ package body Textrender.Rasterizer is
          end if;
 
          while I <= Last loop
-            Next := Points (I);
+            Next := Points.Element (I);
 
             if Next.On_Curve then
                Add_Segment
@@ -291,7 +291,7 @@ package body Textrender.Rasterizer is
                if I = Last then
                   After := Start_Point;
                else
-                  After := Points (I + 1);
+                  After := Points.Element (I + 1);
                end if;
 
                if After.On_Curve then
@@ -388,32 +388,6 @@ package body Textrender.Rasterizer is
          Open_Segments.Set_Length (Ada.Containers.Count_Type (Kept - Open_Segments.First_Index));
       end Build_Active_Segments;
 
-      --  The winding number of the point PX on the row the active edges were
-      --  built for: an upward edge with the point on its left counts one, a
-      --  downward edge with the point on its right minus one.
-      function Inside_Active
-        (PX : Float) return Boolean
-      is
-         Winding : Integer := 0;
-      begin
-         for A in Active_Segments.First_Index .. Active_Segments.Last_Index loop
-            declare
-               E    : constant Active_Edge := Active_Segments.Element (A);
-               Left : constant Float := E.Fixed_Term - (PX - E.X0) * E.Rise;
-            begin
-               if E.Upward then
-                  if Left > 0.0 then
-                     Winding := Winding + 1;
-                  end if;
-               elsif Left < 0.0 then
-                  Winding := Winding - 1;
-               end if;
-            end;
-         end loop;
-
-         return Winding /= 0;
-      end Inside_Active;
-
    begin
       Prepare_Buffers;
 
@@ -465,7 +439,7 @@ package body Textrender.Rasterizer is
          (Textrender.Fonts.U16 (F, End_Points_Off + I * 2));
       end loop;
 
-      Point_Count := End_Points (Contour_Count - 1) + 1;
+      Point_Count := End_Points.Element (Contour_Count - 1) + 1;
 
       if Point_Count = 0 then
          return True;
@@ -502,7 +476,7 @@ package body Textrender.Rasterizer is
          Flag_Value := Textrender.Fonts.Byte_At (F, Off);
          Off := Off + 1;
 
-         Flags (P) := Flag_Value;
+         Flags.Replace_Element (P, Flag_Value);
          P := P + 1;
 
          if Bit_Set (Flag_Value, 16#08#) then
@@ -518,19 +492,19 @@ package body Textrender.Rasterizer is
                   return False;
                end if;
 
-               Flags (P) := Flag_Value;
+               Flags.Replace_Element (P, Flag_Value);
                P := P + 1;
             end loop;
          end if;
       end loop;
 
       for I in 0 .. Point_Count - 1 loop
-         if Bit_Set (Flags (I), 16#02#) then
+         if Bit_Set (Flags.Element (I), 16#02#) then
             if not Textrender.Fonts.Has_Bytes (F, Off, 1) then
                return False;
             end if;
 
-            if Bit_Set (Flags (I), 16#10#) then
+            if Bit_Set (Flags.Element (I), 16#10#) then
                DX := Integer (Textrender.Fonts.Byte_At (F, Off));
             else
                DX := -Integer (Textrender.Fonts.Byte_At (F, Off));
@@ -538,7 +512,7 @@ package body Textrender.Rasterizer is
 
             Off := Off + 1;
          else
-            if Bit_Set (Flags (I), 16#10#) then
+            if Bit_Set (Flags.Element (I), 16#10#) then
                DX := 0;
             else
                if not Textrender.Fonts.Has_Bytes (F, Off, 2) then
@@ -551,16 +525,16 @@ package body Textrender.Rasterizer is
          end if;
 
          X := X + DX;
-         Xs (I) := X;
+         Xs.Replace_Element (I, X);
       end loop;
 
       for I in 0 .. Point_Count - 1 loop
-         if Bit_Set (Flags (I), 16#04#) then
+         if Bit_Set (Flags.Element (I), 16#04#) then
             if not Textrender.Fonts.Has_Bytes (F, Off, 1) then
                return False;
             end if;
 
-            if Bit_Set (Flags (I), 16#20#) then
+            if Bit_Set (Flags.Element (I), 16#20#) then
                DY := Integer (Textrender.Fonts.Byte_At (F, Off));
             else
                DY := -Integer (Textrender.Fonts.Byte_At (F, Off));
@@ -568,7 +542,7 @@ package body Textrender.Rasterizer is
 
             Off := Off + 1;
          else
-            if Bit_Set (Flags (I), 16#20#) then
+            if Bit_Set (Flags.Element (I), 16#20#) then
                DY := 0;
             else
                if not Textrender.Fonts.Has_Bytes (F, Off, 2) then
@@ -581,23 +555,24 @@ package body Textrender.Rasterizer is
          end if;
 
          Y := Y + DY;
-         Ys (I) := Y;
+         Ys.Replace_Element (I, Y);
       end loop;
 
       for I in 0 .. Point_Count - 1 loop
          declare
-            aXs : constant Integer := Xs (I);
-            aYs : constant Integer := Ys (I);
+            aXs : constant Integer := Xs.Element (I);
+            aYs : constant Integer := Ys.Element (I);
             P2 : constant Glyph_Point :=
               Apply
                 (T => Transform,
                  X => Float (aXs),
                  Y => Float (aYs));
          begin
-            Points (I) :=
-              (X        => P2.X,
-               Y        => P2.Y,
-               On_Curve => Bit_Set (Flags (I), 16#01#));
+            Points.Replace_Element
+              (I,
+               Glyph_Point'(X        => P2.X,
+                            Y        => P2.Y,
+                            On_Curve => Bit_Set (Flags.Element (I), 16#01#)));
          end;
       end loop;
 
@@ -607,9 +582,9 @@ package body Textrender.Rasterizer is
          for C in 0 .. Contour_Count - 1 loop
             Build_Contour
               (First => First,
-               Last  => End_Points (C));
+               Last  => End_Points.Element (C));
 
-            First := End_Points (C) + 1;
+            First := End_Points.Element (C) + 1;
          end loop;
       end;
       --  Segments is the accumulator; a stubbed-out "Segment_Count : constant
@@ -625,58 +600,106 @@ package body Textrender.Rasterizer is
          Total_Samples    : constant Positive :=
            Samples_Per_Axis * Samples_Per_Axis;
       begin
-         --  A row of pixels at a time: the edges a subsample row crosses are found once for the whole row, not
-         --  once for each pixel of it, and each pixel counts its covered samples as before.
-         for PY in 0 .. Glyph_H - 1 loop
-            declare
-               type Sample_Counts is array (0 .. Glyph_W - 1) of Natural;
-               Covered : Sample_Counts := [others => 0];
-            begin
-               for SY in 0 .. Samples_Per_Axis - 1 loop
-                  declare
-                     Font_Y : constant Float :=
-                       Float (Y_Max)
-                       - (Float (PY)
-                          + (Float (SY) + 0.5)
-                            / Float (Samples_Per_Axis))
-                         / Scale;
-                  begin
-                     Build_Active_Segments (Sample_Y => Font_Y);
-                     if not Active_Segments.Is_Empty then
-                        for PX in 0 .. Glyph_W - 1 loop
-                           for SX in 0 .. Samples_Per_Axis - 1 loop
+         --  A row of pixels at a time: the edges a subsample row crosses are found once for the whole row, and
+         --  each pixel counts its covered samples.
+         --
+         --  A sample is covered when its winding number is not zero: an upward edge with the sample on its left,
+         --  Fixed_Term - (X - X0) * Rise > 0, counts one, a downward edge with it on its right, the same < 0,
+         --  minus one. The samples' columns never decrease along the row, each the same rounded operations on a
+         --  larger value; so for each edge, whose Rise has one sign, the samples it counts are a prefix of the
+         --  row. A binary search finds that prefix by evaluating the very comparison at a few samples, and the
+         --  prefixes, summed, give each sample's winding number as testing it against every edge did.
+         declare
+            Samples : constant Positive := Glyph_W * Samples_Per_Axis;
+            type Sample_Columns is array (0 .. Samples - 1) of Float;
+            type Sample_Windings is array (0 .. Samples) of Integer;
+            Columns : Sample_Columns;
+            Changes : Sample_Windings;
+         begin
+            for PX in 0 .. Glyph_W - 1 loop
+               for SX in 0 .. Samples_Per_Axis - 1 loop
+                  Columns (PX * Samples_Per_Axis + SX) :=
+                    Float (X_Min)
+                    + (Float (PX)
+                       + (Float (SX) + 0.5)
+                         / Float (Samples_Per_Axis))
+                      / Scale;
+               end loop;
+            end loop;
+            for PY in 0 .. Glyph_H - 1 loop
+               declare
+                  type Sample_Counts is array (0 .. Glyph_W - 1) of Natural;
+                  Covered : Sample_Counts := [others => 0];
+               begin
+                  for SY in 0 .. Samples_Per_Axis - 1 loop
+                     declare
+                        Font_Y : constant Float :=
+                          Float (Y_Max)
+                          - (Float (PY)
+                             + (Float (SY) + 0.5)
+                               / Float (Samples_Per_Axis))
+                            / Scale;
+                     begin
+                        Build_Active_Segments (Sample_Y => Font_Y);
+                        if not Active_Segments.Is_Empty then
+                           Changes := [others => 0];
+                           for A in Active_Segments.First_Index .. Active_Segments.Last_Index loop
                               declare
-                                 Font_X : constant Float :=
-                                   Float (X_Min)
-                                   + (Float (PX)
-                                      + (Float (SX) + 0.5)
-                                        / Float (Samples_Per_Axis))
-                                     / Scale;
+                                 E : constant Active_Edge := Active_Segments.Element (A);
+
+                                 function Counted (K : Natural) return Boolean is
+                                   (if E.Upward then E.Fixed_Term - (Columns (K) - E.X0) * E.Rise > 0.0
+                                    else E.Fixed_Term - (Columns (K) - E.X0) * E.Rise < 0.0);
+
+                                 --  The first sample not counted: Low counts, High does not, or is past the row.
+                                 Low  : Integer := -1;
+                                 High : Natural := Samples;
+                                 Step : constant Integer := (if E.Upward then 1 else -1);
                               begin
-                                 if Inside_Active (PX => Font_X) then
-                                    Covered (PX) := Covered (PX) + 1;
-                                 end if;
+                                 while High - Low > 1 loop
+                                    declare
+                                       Middle : constant Natural := (Low + High) / 2;
+                                    begin
+                                       if Counted (Middle) then
+                                          Low := Middle;
+                                       else
+                                          High := Middle;
+                                       end if;
+                                    end;
+                                 end loop;
+                                 Changes (0) := Changes (0) + Step;
+                                 Changes (High) := Changes (High) - Step;
                               end;
                            end loop;
-                        end loop;
+                           declare
+                              Winding : Integer := 0;
+                           begin
+                              for K in 0 .. Samples - 1 loop
+                                 Winding := Winding + Changes (K);
+                                 if Winding /= 0 then
+                                    Covered (K / Samples_Per_Axis) := Covered (K / Samples_Per_Axis) + 1;
+                                 end if;
+                              end loop;
+                           end;
+                        end if;
+                     end;
+                  end loop;
+                  for PX in 0 .. Glyph_W - 1 loop
+                     if Atlas_X + PX < Textrender.Atlases.Width (A)
+                        and then Atlas_Y + PY < Textrender.Atlases.Height (A)
+                     then
+                        Textrender.Atlases.Blend_Max
+                          (A     => A,
+                           X     => Atlas_X + PX,
+                           Y     => Atlas_Y + PY,
+                           Value =>
+                             Textrender.Atlases.Alpha
+                               ((Covered (PX) * 255) / Total_Samples));
                      end if;
-                  end;
-               end loop;
-               for PX in 0 .. Glyph_W - 1 loop
-                  if Atlas_X + PX < Textrender.Atlases.Width (A)
-                     and then Atlas_Y + PY < Textrender.Atlases.Height (A)
-                  then
-                     Textrender.Atlases.Blend_Max
-                       (A     => A,
-                        X     => Atlas_X + PX,
-                        Y     => Atlas_Y + PY,
-                        Value =>
-                          Textrender.Atlases.Alpha
-                            ((Covered (PX) * 255) / Total_Samples));
-                  end if;
-               end loop;
-            end;
-         end loop;
+                  end loop;
+               end;
+            end loop;
+         end;
       end;
 
       return True;
