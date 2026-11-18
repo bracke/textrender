@@ -331,6 +331,11 @@ package Textrender is
    --  This does not use fallback glyphs and does not rasterize the glyph.
    function Has_Glyph (R : Renderer; C : Codepoint) return Boolean;
 
+   --  Return True if R can draw codepoint C with an outline: its font or one
+   --  of its fallbacks with outlines maps it -- the fonts Get_Glyph would
+   --  choose from. Does not rasterize the glyph.
+   function Can_Draw (R : Renderer; C : Codepoint) return Boolean;
+
    --  Rasterize and cache every codepoint in the inclusive range First .. Last.
    --
    --  This is intended for warming common ranges (for example ASCII) at startup

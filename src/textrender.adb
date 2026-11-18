@@ -318,6 +318,19 @@ package body Textrender is
       return Textrender.Fonts.Has_Glyph (R.State.Font, C);
    end Has_Glyph;
 
+   function Can_Draw (R : Renderer; C : Codepoint) return Boolean is
+   begin
+      if Textrender.Fonts.Has_Glyph (R.State.Font, C) then
+         return True;
+      end if;
+      for F of R.State.Fallbacks loop
+         if Textrender.Fonts.Has_Glyph (F, C) and then not Textrender.Fonts.Is_Bitmap_Only (F) then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Can_Draw;
+
    --  Room for a W by H rectangle in R's atlas, growing it when allowed and
    --  full. Growing changes the height, so every cached glyph's V is taken
    --  again from its pixel rectangle.
